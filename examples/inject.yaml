@@ -4,7 +4,7 @@ esphome:
   board: esp32dev
 
 external_components:
-  - source: github://youruser/esphome_ghostuart
+  - source: https://github.com/rosenrot00/esphome_ghostuart
     components: [ ghostuart ]
 
 # Two UARTs — adjust pins/parity/baud to your devices
