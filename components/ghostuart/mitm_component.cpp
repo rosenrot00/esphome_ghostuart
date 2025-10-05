@@ -20,33 +20,33 @@ uint8_t GhostUARTComponent::calc_lrc_(const uint8_t *data, size_t len) {
   return static_cast<uint8_t>((0x100 - sum8) & 0xFF);
 }
 
-// Recompute effective timings from observed character time on a given side.
-// Called only when cfg == 0 (auto) and we have a moving average estimate.
-void GhostUARTComponent::recompute_timing_(int dir_index) {
-  const auto &s = rx_[dir_index];
-  if (!s.have_char_time || s.char_time_us_ma < 50.0f) return;  // ignore unstable/no estimate
+// Recompute effective timings from baud rate (for auto timing).
+void GhostUARTComponent::recompute_timing_() {
+  // Compute character time from configured baud (assume 8E1 → 11 bits/char; conservative for 8N1)
+  const uint32_t bits_per_char = 11;
+  if (baud_ == 0) return;
+  float char_ms = (1000.0f * bits_per_char) / static_cast<float>(baud_);
 
-  // Convert to milliseconds
-  const float char_ms = s.char_time_us_ma / 1000.0f;
-
-  // Silence: ~3.5 character times (clamped for practicality)
   if (silence_ms_cfg_ == 0) {
     uint32_t auto_ms = static_cast<uint32_t>(std::ceil(3.5f * char_ms));
     if (auto_ms < 3) auto_ms = 3;
-    if (auto_ms > 300) auto_ms = 300;  // allow larger clamp if very slow lines
+    if (auto_ms > 300) auto_ms = 300;
     silence_ms_eff_ = auto_ms;
+  } else {
+    silence_ms_eff_ = silence_ms_cfg_;
   }
 
-  // Pre-listen: ~0.75 character times (min 1 ms)
   if (pre_listen_ms_cfg_ == 0) {
     uint32_t auto_ms = static_cast<uint32_t>(std::lround(0.75f * char_ms));
     if (auto_ms < 1) auto_ms = 1;
     pre_listen_ms_eff_ = auto_ms;
+  } else {
+    pre_listen_ms_eff_ = pre_listen_ms_cfg_;
   }
 
   if (debug_enabled_) {
-    ESP_LOGD(TAG, "recompute_timing side=%d char_ms=%.3f -> silence_ms=%u pre_listen_ms=%u",
-             dir_index, char_ms, silence_ms_eff_, pre_listen_ms_eff_);
+    ESP_LOGD(TAG, "recompute_timing baud=%u char_ms=%.3f -> silence_ms=%u pre_listen_ms=%u",
+             baud_, char_ms, silence_ms_eff_, pre_listen_ms_eff_);
   }
 }
 
@@ -90,6 +90,9 @@ void GhostUARTComponent::setup() {
 
   ESP_LOGI(TAG, "GhostUART setup – max_frame=%u, silence=%u ms, pre_listen=%u ms, debug=%s",
            max_frame_, silence_ms_eff_, pre_listen_ms_eff_, debug_enabled_ ? "true" : "false");
+
+  // Initialize auto timings from baud if requested (silence/pre_listen == 0)
+  recompute_timing_();
 }
 
 void GhostUARTComponent::loop() {
@@ -134,25 +137,9 @@ void GhostUARTComponent::read_uart_(Direction dir) {
     if (r <= 0) break;
 
     uint32_t now_ms = millis();
-    uint32_t now_us = micros();
     auto &s = rx_[static_cast<int>(dir)];
 
     for (int i = 0; i < r; ++i) {
-      if (s.last_byte_us != 0) {
-        uint32_t delta_us = now_us - s.last_byte_us;
-        const float alpha = 0.15f;
-        if (!s.have_char_time) {
-          s.char_time_us_ma = static_cast<float>(delta_us);
-          s.have_char_time = true;
-        } else {
-          s.char_time_us_ma = (1.0f - alpha) * s.char_time_us_ma + alpha * static_cast<float>(delta_us);
-        }
-        if (silence_ms_cfg_ == 0 || pre_listen_ms_cfg_ == 0) {
-          recompute_timing_(static_cast<int>(dir));
-        }
-      }
-      s.last_byte_us = now_us;
-
       if (s.buffer.size() < max_frame_) {
         s.buffer.push_back(buf[i]);
         s.interbyte_us.push_back(1);
