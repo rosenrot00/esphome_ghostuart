@@ -16,7 +16,6 @@ CONF_PRE_LISTEN_MS = "pre_listen_ms"
 CONF_MAX_RETRIES = "max_retries"
 CONF_DEBUG = "debug"
 CONF_BAUD = "baud"
-CONF_MIN_FRAME_LEN = "min_frame_len"
 
 CONFIG_SCHEMA = cv.Schema(
     {
@@ -31,7 +30,6 @@ CONFIG_SCHEMA = cv.Schema(
         cv.Optional(CONF_MAX_RETRIES, default=2): cv.int_range(min=0, max=10),
         cv.Optional(CONF_DEBUG, default=False): cv.boolean,
         cv.Optional(CONF_BAUD, default=9600): cv.int_range(min=300, max=1000000),
-        cv.Optional(CONF_MIN_FRAME_LEN, default=3): cv.int_range(min=1, max=64),
     }
 ).extend(cv.COMPONENT_SCHEMA)
 
@@ -49,7 +47,6 @@ async def to_code(config):
 
     # Frame limit
     cg.add(var.set_max_frame(config[CONF_MAX_FRAME]))
-    cg.add(var.set_min_frame_len(config[CONF_MIN_FRAME_LEN]))
 
     # Silence and pre-listen timing (0 = auto -> computed from baud)
     cg.add(var.set_silence_ms(config[CONF_SILENCE_MS]))
