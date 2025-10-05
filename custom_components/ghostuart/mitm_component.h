@@ -1,6 +1,3 @@
-// SPDX-License-Identifier: Apache-2.0
-// esphome_ghostuart - Generic UART MITM for ESPHome (A/B sides)
-
 #pragma once
 
 #include "esphome/core/component.h"
@@ -16,12 +13,12 @@ namespace esphome {
 namespace ghostuart {
 
 // Defaults (can be overridden via YAML setters)
-constexpr uint32_t DEFAULT_BAUD = 9600;
+constexpr uint32_t DEFAULT_BAUD = 9600;            // retained as historical default (not used in adaptive mode)
 constexpr uint16_t DEFAULT_MAX_FRAME = 512;
 constexpr uint16_t DEFAULT_RX_BUF = 4096;
 constexpr uint16_t DEFAULT_TX_BUF = 2048;
-constexpr uint32_t DEFAULT_SILENCE_MS = 15;   // 0 = auto
-constexpr uint32_t DEFAULT_PRE_LISTEN_MS = 3; // 0 = auto
+constexpr uint32_t DEFAULT_SILENCE_MS = 15;        // 0 = auto
+constexpr uint32_t DEFAULT_PRE_LISTEN_MS = 3;      // 0 = auto
 constexpr uint8_t  DEFAULT_MAX_RETRIES = 2;
 
 enum class Direction : uint8_t { A_TO_B = 0, B_TO_A = 1 };
@@ -89,13 +86,13 @@ class GhostUARTComponent : public Component {
   void set_uart_a(uart::UARTComponent *u) { uart_a_ = u; }
   void set_uart_b(uart::UARTComponent *u) { uart_b_ = u; }
 
-  // Shared baud rate for A and B (used for auto timing; UARTs themselves are set in YAML)
-  void set_baud(uint32_t baud) { baud_ = baud; recompute_timing_(); }
-
   // Timing/config (YAML setters – 0 means auto)
-  void set_silence_ms(uint32_t ms) { silence_ms_cfg_ = ms; recompute_timing_(); }
-  void set_pre_listen_ms(uint32_t ms) { pre_listen_ms_cfg_ = ms; recompute_timing_(); }
+  void set_silence_ms(uint32_t ms) { silence_ms_cfg_ = ms; recompute_timing_(0); recompute_timing_(1); }
+  void set_pre_listen_ms(uint32_t ms) { pre_listen_ms_cfg_ = ms; recompute_timing_(0); recompute_timing_(1); }
   void set_max_frame(uint16_t n) { max_frame_ = n; }
+
+  // Debug control
+  void set_debug(bool en);
 
   // Mappings & templates
   void add_mapping(const Mapping &m) { mappings_.push_back(m); }
@@ -113,6 +110,7 @@ class GhostUARTComponent : public Component {
   uint32_t get_frames_parsed() const { return frames_parsed_; }
   uint32_t get_checksum_errors() const { return checksum_errors_; }
 
+  // Component hooks
   void setup() override;
   void loop() override;
   float get_setup_priority() const override { return setup_priority::LATE; }
@@ -123,19 +121,23 @@ class GhostUARTComponent : public Component {
   uart::UARTComponent *uart_b_{nullptr}; // side B
 
   // Runtime config
-  uint32_t baud_{DEFAULT_BAUD};
   uint16_t max_frame_{DEFAULT_MAX_FRAME};
   uint32_t silence_ms_cfg_{DEFAULT_SILENCE_MS};       // 0 = auto
   uint32_t pre_listen_ms_cfg_{DEFAULT_PRE_LISTEN_MS}; // 0 = auto
   uint32_t silence_ms_eff_{DEFAULT_SILENCE_MS};       // effective value after auto calculation
   uint32_t pre_listen_ms_eff_{DEFAULT_PRE_LISTEN_MS};
 
-  // RX state
+  // RX state (per-direction)
   struct RxState {
     std::vector<uint8_t>  buffer;
     std::vector<uint16_t> interbyte_us;
     uint32_t last_rx_ms{0};
     bool     frame_ready{false};
+
+    // Adaptive timing fields
+    uint32_t last_byte_us{0};
+    float    char_time_us_ma{0.0f};   // moving average of inter-byte microseconds
+    bool     have_char_time{false};
   } rx_[2];
 
   // Injection
@@ -146,11 +148,14 @@ class GhostUARTComponent : public Component {
   std::vector<Mapping> mappings_;
   std::vector<FrameTemplate> templates_;
 
-  // Vars & stats
+  // Stored variables & stats
   std::unordered_map<std::string, StoredVar> vars_;
   uint32_t frames_forwarded_[2]{0,0};
   uint32_t frames_parsed_{0};
   uint32_t checksum_errors_{0};
+
+  // Debug flag
+  bool debug_enabled_{false};
 
   // Internals
   void read_uart_(Direction dir);
@@ -174,7 +179,7 @@ class GhostUARTComponent : public Component {
   void process_inject_queue_();
 
   bool bus_idle_() const;
-  void recompute_timing_(); // Auto: derive from baud_
+  void recompute_timing_(int dir_index); // derive effective timing for a side from observed char time
 
   static uart::UARTComponent *rx_uart_(Direction dir, uart::UARTComponent *a, uart::UARTComponent *b) {
     return (dir == Direction::A_TO_B) ? a : b;
