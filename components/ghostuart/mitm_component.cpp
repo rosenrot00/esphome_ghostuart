@@ -179,12 +179,8 @@ void GhostUARTComponent::on_silence_expired_(Direction dir) {
   s.frame_ready = false;
   frames_parsed_++;
 
-  // Parse → update stored variables, then forward the complete frame
-  try {
-    parse_and_store_(frame);
-  } catch (...) {
-    ESP_LOGW(TAG, "Exception in parse_and_store_");
-  }
+  // Parse and store: exceptions are disabled in ESPHome builds; call directly.
+  parse_and_store_(frame);
 
   forward_frame_(dir, frame);
 }
