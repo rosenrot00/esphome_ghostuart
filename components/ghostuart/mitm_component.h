@@ -157,6 +157,12 @@ class GhostUARTComponent : public Component {
   uint32_t frames_parsed_{0};
   uint32_t checksum_errors_{0};
 
+  // Ready (fully delimited) frames produced by the RX task; processed in loop()
+  std::vector<std::vector<uint8_t>> ready_frames_[2];
+
+  // Enqueue a finished frame from RX task
+  void enqueue_ready_frame_(Direction dir, std::vector<uint8_t> &&frame);
+
   // Debug flag
   bool debug_enabled_{false};
 
