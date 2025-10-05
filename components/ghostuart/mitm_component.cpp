@@ -164,23 +164,6 @@ void GhostUARTComponent::on_silence_expired_(Direction dir) {
   if (s.buffer.empty()) return;
 
   std::vector<uint8_t> frame = s.buffer;
-  // Drop obvious noise frames (e.g., floating RX) of very small length
-  // Treat frames with <= 2 bytes as noise, and rate-limit the log to avoid spam.
-  static uint32_t last_noise_log_ms = 0;
-  if (frame.size() <= 2) {
-    if (debug_enabled_) {
-      uint32_t now = millis();
-      if (now - last_noise_log_ms >= 2000) {  // log at most once every 2 s
-        const char side = (dir == Direction::A_TO_B) ? 'A' : 'B';
-        ESP_LOGD(TAG, "[%c] Dropped short frame (len=%u) as noise", side, (unsigned)frame.size());
-        last_noise_log_ms = now;
-      }
-    }
-    s.buffer.clear();
-    s.interbyte_us.clear();
-    s.frame_ready = false;
-    return;
-  }
   s.buffer.clear();
   s.interbyte_us.clear();
   s.frame_ready = false;
