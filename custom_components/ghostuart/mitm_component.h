@@ -25,7 +25,7 @@ constexpr uint32_t DEFAULT_PRE_LISTEN_MS = 3; // Short check before sending
 constexpr uint8_t  DEFAULT_MAX_RETRIES = 2;
 
 // ---- Utility enums ---------------------------------------------------------
-enum class Direction : uint8_t { MCU_TO_BUS = 0, BUS_TO_MCU = 1 };
+enum class Direction : uint8_t { A_TO_B = 0, B_TO_A = 1 };
 
 // ---- Field mapping: extract values from frames -----------------------------
 enum class FieldFormat : uint8_t {
@@ -42,9 +42,7 @@ struct FieldDescriptor {
   uint32_t    mask{0};       // optional bit-mask (for BITFIELD)
   uint8_t     shift{0};      // optional shift for masked bits
   bool        persist{false}; // whether to persist across reboots
-  // Optional transform: map raw value -> final (string or numeric as string)
-  // For simplicity in v1 we keep transforms inside component, keyed by name.
-  std::string transform;     // e.g., "mode_lookup"
+  std::string transform;     // optional transform name (implemented in component)
 };
 
 struct FrameSelector {
@@ -61,7 +59,6 @@ struct Mapping {
 // ---- Template-based injection ---------------------------------------------
 struct TemplateField {
   // A named placeholder to be filled from stored variables or overrides.
-  // Example: name="remote_setpoint", format=int16_le, scale=0.1 (inverse used on send)
   std::string name;
   FieldFormat format{FieldFormat::INT16_LE};
   float       scale{1.0f};      // physical -> raw conversion uses 1/scale
@@ -69,17 +66,9 @@ struct TemplateField {
 
 struct FrameTemplate {
   std::string name; // e.g., "setpoint_cmd"
-  // Static prefix before placeholder fields (header, type, len placeholder optional).
   std::vector<uint8_t> fixed_prefix;
-
-  // Ordered placeholder fields that get encoded and appended in order.
   std::vector<TemplateField> placeholders;
-
-  // Optional: whether to auto-append LRC/CRC at the end (v1: LRC-8 two’s complement).
   bool append_lrc{true};
-
-  // If true, we attempt to send immediately after a matching selector block
-  // (auxiliary-reply timing). If false, generic bus-idle timing is used.
   bool expect_aux_after{false};
   FrameSelector aux_after_selector; // optional pattern to increase success rate
 };
@@ -87,8 +76,6 @@ struct FrameTemplate {
 // ---- Injection job ---------------------------------------------------------
 struct InjectJob {
   std::string template_name;
-  // Optional overrides: name -> value (as stringified float or hex raw)
-  // v1: numeric only; component will parse/convert. Empty -> take from stored vars.
   std::unordered_map<std::string, std::string> overrides;
   uint8_t  retries_left{DEFAULT_MAX_RETRIES};
   uint32_t created_ms{0};
@@ -96,7 +83,6 @@ struct InjectJob {
 
 // ---- Stored variable -------------------------------------------------------
 struct StoredVar {
-  // We store both scaled (human) and raw bytes for reverse-encoding.
   bool        has_value{false};
   float       scaled{NAN};              // e.g., °C
   std::vector<uint8_t> last_raw;       // raw bytes as captured
@@ -107,7 +93,7 @@ struct StoredVar {
 // ---- GhostUART Component ---------------------------------------------------
 class GhostUARTComponent : public Component {
  public:
-  // Wiring: UART A = MCU-side, UART B = BUS/MM1192-side
+  // Wiring: UART A = side A, UART B = side B
   void set_uart_a(uart::UARTComponent *u) { uart_a_ = u; }
   void set_uart_b(uart::UARTComponent *u) { uart_b_ = u; }
 
@@ -124,7 +110,6 @@ class GhostUARTComponent : public Component {
   float get_var(const std::string &name) const;
 
   // Enqueue an inject job by template name and optional overrides.
-  // Returns true if enqueued.
   bool send_template(const std::string &template_name,
                      const std::unordered_map<std::string, std::string> &overrides);
 
@@ -141,8 +126,8 @@ class GhostUARTComponent : public Component {
 
  protected:
   // UARTs
-  uart::UARTComponent *uart_a_{nullptr}; // MCU side
-  uart::UARTComponent *uart_b_{nullptr}; // BUS side
+  uart::UARTComponent *uart_a_{nullptr}; // side A
+  uart::UARTComponent *uart_b_{nullptr}; // side B
 
   // RX state per direction
   struct RxState {
@@ -207,10 +192,10 @@ class GhostUARTComponent : public Component {
 
   // Utility
   static uart::UARTComponent *rx_uart_(Direction dir, uart::UARTComponent *a, uart::UARTComponent *b) {
-    return (dir == Direction::MCU_TO_BUS) ? a : b;
+    return (dir == Direction::A_TO_B) ? a : b;
   }
   static uart::UARTComponent *tx_uart_(Direction dir, uart::UARTComponent *a, uart::UARTComponent *b) {
-    return (dir == Direction::MCU_TO_BUS) ? b : a;
+    return (dir == Direction::A_TO_B) ? b : a;
   }
 };
 
