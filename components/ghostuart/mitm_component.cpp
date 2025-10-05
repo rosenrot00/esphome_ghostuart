@@ -11,6 +11,17 @@ namespace ghostuart {
 
 static const char *TAG = "ghostuart";
 
+// RX task: continuously services both UART sides so framing is independent of loop() latency
+static void ghostuart_rx_task(void *param) {
+  auto *self = reinterpret_cast<GhostUARTComponent*>(param);
+  // Small cooperative delay to avoid watchdog issues
+  const TickType_t tick_1ms = pdMS_TO_TICKS(1);
+  for (;;) {
+    self->rx_task_tick();
+    vTaskDelay(tick_1ms);
+  }
+}
+
 // ------------------------------- Utility ------------------------------------
 // Calculate 8-bit LRC (two's complement of byte sum)
 uint8_t GhostUARTComponent::calc_lrc_(const uint8_t *data, size_t len) {
@@ -84,23 +95,12 @@ void GhostUARTComponent::set_debug(bool en) {
 
 // ------------------------------ Setup / Loop -------------------------------
 void GhostUARTComponent::setup() {
-  // Initialize effective timings from config if explicitly set.
-  if (silence_ms_cfg_ != 0) silence_ms_eff_ = silence_ms_cfg_;
-  if (pre_listen_ms_cfg_ != 0) pre_listen_ms_eff_ = pre_listen_ms_cfg_;
-
-  ESP_LOGI(TAG, "GhostUART setup – max_frame=%u, silence=%u ms, pre_listen=%u ms, debug=%s",
-           max_frame_, silence_ms_eff_, pre_listen_ms_eff_, debug_enabled_ ? "true" : "false");
-
-  // Initialize auto timings from baud if requested (silence/pre_listen == 0)
-  recompute_timing_();
-}
-
-void GhostUARTComponent::loop() {
-  // 1) Poll both UARTs
+void GhostUARTComponent::rx_task_tick() {
+  // Service both sides
   read_uart_(Direction::A_TO_B);
   read_uart_(Direction::B_TO_A);
 
-  // 2) Detect silence → end of frame
+  // Close frames on idle (do framing in RX task to decouple from loop timing)
   uint32_t now_ms = millis();
   for (int d = 0; d < 2; ++d) {
     Direction dir = static_cast<Direction>(d);
@@ -114,8 +114,23 @@ void GhostUARTComponent::loop() {
       }
     }
   }
+}
+  // Initialize effective timings from config if explicitly set.
+  if (silence_ms_cfg_ != 0) silence_ms_eff_ = silence_ms_cfg_;
+  if (pre_listen_ms_cfg_ != 0) pre_listen_ms_eff_ = pre_listen_ms_cfg_;
 
-  // 3) Handle injection queue
+  ESP_LOGI(TAG, "GhostUART setup – max_frame=%u, silence=%u ms, pre_listen=%u ms, debug=%s",
+           max_frame_, silence_ms_eff_, pre_listen_ms_eff_, debug_enabled_ ? "true" : "false");
+
+  // Initialize auto timings from baud if requested (silence/pre_listen == 0)
+  recompute_timing_();
+
+  // Spawn a dedicated RX task so we service UART buffers independent of loop() load
+  xTaskCreatePinnedToCore(ghostuart_rx_task, "ghostuart_rx", 4096, this, 10, nullptr, tskNO_AFFINITY);
+}
+
+void GhostUARTComponent::loop() {
+  // RX/framing is handled in the dedicated RX task; process injection here
   process_inject_queue_();
 }
 
