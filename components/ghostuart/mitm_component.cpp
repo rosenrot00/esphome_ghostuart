@@ -114,7 +114,7 @@ void GhostUARTComponent::setup() {
   recompute_timing_();
 
   // Spawn a dedicated RX task so we service UART buffers independent of loop() load
-  xTaskCreatePinnedToCore(ghostuart_rx_task, "ghostuart_rx", 4096, this, 10, nullptr, tskNO_AFFINITY);
+  //xTaskCreatePinnedToCore(ghostuart_rx_task, "ghostuart_rx", 4096, this, 10, nullptr, tskNO_AFFINITY);
 }
 
 void GhostUARTComponent::rx_task_tick() {
