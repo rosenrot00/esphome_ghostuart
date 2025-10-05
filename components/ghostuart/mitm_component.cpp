@@ -95,6 +95,20 @@ void GhostUARTComponent::set_debug(bool en) {
 
 // ------------------------------ Setup / Loop -------------------------------
 void GhostUARTComponent::setup() {
+  // Initialize effective timings from config if explicitly set.
+  if (silence_ms_cfg_ != 0) silence_ms_eff_ = silence_ms_cfg_;
+  if (pre_listen_ms_cfg_ != 0) pre_listen_ms_eff_ = pre_listen_ms_cfg_;
+
+  ESP_LOGI(TAG, "GhostUART setup – max_frame=%u, silence=%u ms, pre_listen=%u ms, debug=%s",
+           max_frame_, silence_ms_eff_, pre_listen_ms_eff_, debug_enabled_ ? "true" : "false");
+
+  // Initialize auto timings from baud if requested (silence/pre_listen == 0)
+  recompute_timing_();
+
+  // Spawn a dedicated RX task so we service UART buffers independent of loop() load
+  xTaskCreatePinnedToCore(ghostuart_rx_task, "ghostuart_rx", 4096, this, 10, nullptr, tskNO_AFFINITY);
+}
+
 void GhostUARTComponent::rx_task_tick() {
   // Service both sides
   read_uart_(Direction::A_TO_B);
@@ -114,19 +128,6 @@ void GhostUARTComponent::rx_task_tick() {
       }
     }
   }
-}
-  // Initialize effective timings from config if explicitly set.
-  if (silence_ms_cfg_ != 0) silence_ms_eff_ = silence_ms_cfg_;
-  if (pre_listen_ms_cfg_ != 0) pre_listen_ms_eff_ = pre_listen_ms_cfg_;
-
-  ESP_LOGI(TAG, "GhostUART setup – max_frame=%u, silence=%u ms, pre_listen=%u ms, debug=%s",
-           max_frame_, silence_ms_eff_, pre_listen_ms_eff_, debug_enabled_ ? "true" : "false");
-
-  // Initialize auto timings from baud if requested (silence/pre_listen == 0)
-  recompute_timing_();
-
-  // Spawn a dedicated RX task so we service UART buffers independent of loop() load
-  xTaskCreatePinnedToCore(ghostuart_rx_task, "ghostuart_rx", 4096, this, 10, nullptr, tskNO_AFFINITY);
 }
 
 void GhostUARTComponent::loop() {
