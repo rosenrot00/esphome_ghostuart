@@ -20,7 +20,6 @@ constexpr uint16_t DEFAULT_TX_BUF = 2048;
 constexpr uint32_t DEFAULT_SILENCE_MS = 15;        // 0 = auto
 constexpr uint32_t DEFAULT_PRE_LISTEN_MS = 3;      // 0 = auto
 constexpr uint8_t  DEFAULT_MAX_RETRIES = 2;
-constexpr uint16_t DEFAULT_MIN_FRAME_LEN = 0;
 
 enum class Direction : uint8_t { A_TO_B = 0, B_TO_A = 1 };
 
@@ -95,8 +94,6 @@ class GhostUARTComponent : public Component {
   void set_pre_listen_ms(uint32_t ms) { pre_listen_ms_cfg_ = ms; recompute_timing_(); }
   void set_max_frame(uint16_t n) { max_frame_ = n; }
 
-  // Noise filter – minimum accepted frame length (frames shorter than this are dropped)
-  void set_min_frame_len(uint16_t n) { min_frame_len_ = n; }
 
   // Debug control
   void set_debug(bool en);
@@ -134,7 +131,6 @@ class GhostUARTComponent : public Component {
   uint32_t pre_listen_ms_cfg_{DEFAULT_PRE_LISTEN_MS}; // 0 = auto (from baud)
   uint32_t silence_ms_eff_{DEFAULT_SILENCE_MS};       // effective value after auto calculation
   uint32_t pre_listen_ms_eff_{DEFAULT_PRE_LISTEN_MS};
-  uint16_t min_frame_len_{DEFAULT_MIN_FRAME_LEN};     // short-frame noise filter
 
   // RX state (per-direction)
   struct RxState {
