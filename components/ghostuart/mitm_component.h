@@ -9,6 +9,9 @@
 #include <unordered_map>
 #include <cmath>
 
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+
 namespace esphome {
 namespace ghostuart {
 
@@ -122,6 +125,9 @@ class GhostUARTComponent : public Component {
   // Service RX and close frames on idle (called from the dedicated RX task)
   void rx_task_tick();
 
+  // Enable/disable the RX task (e.g., suspend during OTA)
+  void set_rx_task_enabled(bool en);
+
  protected:
   // UARTs
   uart::UARTComponent *uart_a_{nullptr}; // side A
@@ -165,6 +171,10 @@ class GhostUARTComponent : public Component {
 
   // Debug flag
   bool debug_enabled_{false};
+
+  // RX task control
+  TaskHandle_t rx_task_handle_{nullptr};
+  bool rx_task_enabled_{true};
 
   // Internals
   void read_uart_(Direction dir);
