@@ -13,6 +13,7 @@ namespace ghostuart {
 static const char *TAG = "ghostuart";
 
 // ------------------------------- Utility ------------------------------------
+// Calculate 8-bit LRC (two’s complement of byte sum)
 uint8_t GhostUARTComponent::calc_lrc_(const uint8_t *data, size_t len) {
   uint32_t s = 0;
   for (size_t i = 0; i < len; ++i) s += data[i];
@@ -24,16 +25,15 @@ static inline uint32_t ceil_div_u32(uint32_t a, uint32_t b) {
   return (a + b - 1) / b;
 }
 
-// Auto-Berechnung basierend auf gemeinsamer Baudrate, 8E1 → 11 Bits/Zeichen
+// Automatically calculate timing values from baud rate (8E1 → 11 bits per char)
 void GhostUARTComponent::recompute_timing_() {
-  const uint32_t bits_per_char = 11; // 8E1; passt auch konservativ für 8N1 (10 Bits) mit etwas Reserve
+  const uint32_t bits_per_char = 11;  // 8E1; also safe for 8N1 (10 bits)
   // char_time_ms = 1000 * bits_per_char / baud_
   uint32_t char_time_ms = (baud_ > 0) ? ceil_div_u32(1000 * bits_per_char, baud_) : 1;
 
-  // Silence: 3.5 Zeichenzeiten
+  // Silence = 3.5 character times
   if (silence_ms_cfg_ == 0) {
     uint32_t auto_ms = static_cast<uint32_t>(std::ceil(3.5f * char_time_ms));
-    // leichte Klammer – hält es praxisnah
     if (auto_ms < 3) auto_ms = 3;
     if (auto_ms > 30) auto_ms = 30;
     silence_ms_eff_ = auto_ms;
@@ -41,7 +41,7 @@ void GhostUARTComponent::recompute_timing_() {
     silence_ms_eff_ = silence_ms_cfg_;
   }
 
-  // Pre-listen: 0.75 Zeichenzeiten, min 1 ms
+  // Pre-listen = 0.75 character times (minimum 1 ms)
   if (pre_listen_ms_cfg_ == 0) {
     uint32_t auto_ms = static_cast<uint32_t>(std::lround(0.75f * char_time_ms));
     if (auto_ms < 1) auto_ms = 1;
@@ -80,17 +80,17 @@ bool GhostUARTComponent::send_template(const std::string &template_name,
 
 // ------------------------------ Setup / Loop -------------------------------
 void GhostUARTComponent::setup() {
-  // Falls YAML nichts gesetzt hat – initiale Auto-Berechnung
+  // Run auto-timing calculation if YAML values were not provided
   recompute_timing_();
   ESP_LOGI(TAG, "GhostUART setup – max_frame=%u", max_frame_);
 }
 
 void GhostUARTComponent::loop() {
-  // 1) RX poll
+  // 1) Poll both UARTs
   read_uart_(Direction::A_TO_B);
   read_uart_(Direction::B_TO_A);
 
-  // 2) Silence-Check → Frameende
+  // 2) Detect silence → end of frame
   uint32_t now_ms = millis();
   for (int d = 0; d < 2; ++d) {
     Direction dir = static_cast<Direction>(d);
@@ -105,11 +105,12 @@ void GhostUARTComponent::loop() {
     }
   }
 
-  // 3) Inject-Queue
+  // 3) Handle injection queue
   process_inject_queue_();
 }
 
 // ------------------------------ UART read ----------------------------------
+// Read all available bytes from one UART direction and store them in buffer
 void GhostUARTComponent::read_uart_(Direction dir) {
   uart::UARTComponent *rxu = rx_uart_(dir, uart_a_, uart_b_);
   if (!rxu) return;
@@ -125,7 +126,7 @@ void GhostUARTComponent::read_uart_(Direction dir) {
         s.buffer.push_back(buf[i]);
         s.interbyte_us.push_back(1);
       } else {
-        // Schutz – älteste raus
+        // Overflow protection – drop oldest byte
         s.buffer.erase(s.buffer.begin());
         s.buffer.push_back(buf[i]);
       }
@@ -136,6 +137,7 @@ void GhostUARTComponent::read_uart_(Direction dir) {
 }
 
 // ---------------------------- Silence expired ------------------------------
+// Called when a frame is complete (no bytes received for silence_ms_eff_)
 void GhostUARTComponent::on_silence_expired_(Direction dir) {
   auto &s = rx_[static_cast<int>(dir)];
   if (s.buffer.empty()) return;
@@ -156,6 +158,7 @@ void GhostUARTComponent::on_silence_expired_(Direction dir) {
 }
 
 // ---------------------------- Forwarding -----------------------------------
+// Forward a complete frame from side A→B or B→A
 void GhostUARTComponent::forward_frame_(Direction dir, const std::vector<uint8_t> &frame) {
   uart::UARTComponent *txu = tx_uart_(dir, uart_a_, uart_b_);
   if (!txu) {
@@ -170,6 +173,7 @@ void GhostUARTComponent::forward_frame_(Direction dir, const std::vector<uint8_t
 }
 
 // ----------------------------- Parsing -------------------------------------
+// Parse received frame using mappings and update stored variables
 void GhostUARTComponent::parse_and_store_(const std::vector<uint8_t> &frame) {
   for (const auto &m : mappings_) {
     if (!selector_match_(m.selector, frame)) continue;
@@ -179,7 +183,7 @@ void GhostUARTComponent::parse_and_store_(const std::vector<uint8_t> &frame) {
       std::vector<uint8_t> raw;
       bool ok = decode_field_(fd, frame, val_str, val_scaled, raw);
       if (!ok) {
-        ESP_LOGD(TAG, "Failed decode field '%s' (mapping '%s')", fd.name.c_str(), m.name.c_str());
+        ESP_LOGD(TAG, "Failed to decode field '%s' (mapping '%s')", fd.name.c_str(), m.name.c_str());
         continue;
       }
       StoredVar &sv = vars_[fd.name];
@@ -343,6 +347,7 @@ bool GhostUARTComponent::build_frame_from_template_(const FrameTemplate &tp,
 }
 
 // ------------------------ Inject queue processing --------------------------
+// Wait for bus idle, then send next frame from the injection queue
 bool GhostUARTComponent::bus_idle_() const {
   uint32_t now = millis();
   for (int d = 0; d < 2; ++d) {
@@ -367,7 +372,7 @@ void GhostUARTComponent::process_inject_queue_() {
     return;
   }
 
-  // Warten bis wirklich idle ist
+  // Wait until both sides are idle
   if (!bus_idle_()) return;
   delay(pre_listen_ms_eff_);
   if (!bus_idle_()) return;
@@ -379,7 +384,7 @@ void GhostUARTComponent::process_inject_queue_() {
     return;
   }
 
-  // Senden auf Seite B (typischer Remote-Emulator)
+  // Send on side B (typical remote emulation)
   uart::UARTComponent *txb = uart_b_;
   if (!txb) {
     ESP_LOGW(TAG, "No side B UART configured for inject");
