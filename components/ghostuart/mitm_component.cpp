@@ -124,7 +124,13 @@ void GhostUARTComponent::read_uart_(Direction dir) {
 
   uint8_t buf[128];
   while (true) {
-    int r = rxu->read_array(buf, sizeof(buf));
+    int avail = rxu->available();
+    if (avail <= 0) break;
+
+    int to_read = avail;
+    if (to_read > static_cast<int>(sizeof(buf))) to_read = sizeof(buf);
+
+    int r = rxu->read_array(buf, to_read);
     if (r <= 0) break;
 
     uint32_t now_ms = millis();
@@ -132,38 +138,35 @@ void GhostUARTComponent::read_uart_(Direction dir) {
     auto &s = rx_[static_cast<int>(dir)];
 
     for (int i = 0; i < r; ++i) {
-      // Adaptive timing: track inter-byte delta as moving average (per side)
       if (s.last_byte_us != 0) {
         uint32_t delta_us = now_us - s.last_byte_us;
-        const float alpha = 0.15f;  // EMA smoothing factor
+        const float alpha = 0.15f;
         if (!s.have_char_time) {
           s.char_time_us_ma = static_cast<float>(delta_us);
           s.have_char_time = true;
         } else {
           s.char_time_us_ma = (1.0f - alpha) * s.char_time_us_ma + alpha * static_cast<float>(delta_us);
         }
-
-        // Recompute effective timings on-the-fly if cfg == 0 (auto)
         if (silence_ms_cfg_ == 0 || pre_listen_ms_cfg_ == 0) {
           recompute_timing_(static_cast<int>(dir));
         }
       }
       s.last_byte_us = now_us;
 
-      // Buffer the byte
       if (s.buffer.size() < max_frame_) {
         s.buffer.push_back(buf[i]);
-        // store placeholder inter byte; we may expand later to store real deltas
         s.interbyte_us.push_back(1);
       } else {
-        // Overflow protection – drop oldest byte to keep most recent bytes
         s.buffer.erase(s.buffer.begin());
         s.buffer.push_back(buf[i]);
       }
 
       s.last_rx_ms = now_ms;
-      s.frame_ready = false;  // reset frame-ready while receiving
+      s.frame_ready = false;
     }
+
+    // Yield to let the UART driver and other tasks run
+    delay(0);
   }
 }
 
@@ -174,6 +177,16 @@ void GhostUARTComponent::on_silence_expired_(Direction dir) {
   if (s.buffer.empty()) return;
 
   std::vector<uint8_t> frame = s.buffer;
+  // Drop obvious noise frames (e.g., floating RX) of length <= 1
+  if (frame.size() <= 1) {
+    if (debug_enabled_) {
+      ESP_LOGD(TAG, "Dropped short frame (len=%u) as noise", (unsigned)frame.size());
+    }
+    s.buffer.clear();
+    s.interbyte_us.clear();
+    s.frame_ready = false;
+    return;
+  }
   s.buffer.clear();
   s.interbyte_us.clear();
   s.frame_ready = false;
