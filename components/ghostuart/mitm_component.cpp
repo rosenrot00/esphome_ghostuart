@@ -31,7 +31,7 @@ void GhostUARTComponent::recompute_timing_() {
   const float char_ms = (1000.0f * bits_per_char) / static_cast<float>(baud_);
 
   // Hard-code to 3 chars silence
-  uint32_t silence_ms = static_cast<uint32_t>(std::ceil(35.0f * char_ms));
+  uint32_t silence_ms = static_cast<uint32_t>(std::ceil(65.0f * char_ms));
   if (silence_ms < 1) silence_ms = 1;
   if (silence_ms > 300) silence_ms = 300;
   silence_ms_eff_ = silence_ms;
