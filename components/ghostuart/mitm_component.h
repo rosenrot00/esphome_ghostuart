@@ -119,6 +119,9 @@ class GhostUARTComponent : public Component {
   void loop() override;
   float get_setup_priority() const override { return setup_priority::LATE; }
 
+  // Service RX and close frames on idle (called from the dedicated RX task)
+  void rx_task_tick();
+
  protected:
   // UARTs
   uart::UARTComponent *uart_a_{nullptr}; // side A
