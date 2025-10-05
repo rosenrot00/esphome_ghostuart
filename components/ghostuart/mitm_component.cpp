@@ -171,7 +171,8 @@ void GhostUARTComponent::on_silence_expired_(Direction dir) {
     if (debug_enabled_) {
       uint32_t now = millis();
       if (now - last_noise_log_ms >= 2000) {  // log at most once every 2 s
-        ESP_LOGD(TAG, "Dropped short frame (len=%u) as noise", (unsigned)frame.size());
+        const char side = (dir == Direction::A_TO_B) ? 'A' : 'B';
+        ESP_LOGD(TAG, "[%c] Dropped short frame (len=%u) as noise", side, (unsigned)frame.size());
         last_noise_log_ms = now;
       }
     }
