@@ -1,11 +1,10 @@
-// SPDX-License-Identifier: Apache-2.0
-// esphome_ghostuart - Generic UART MITM for ESPHome (A/B sides)
-
 #include "mitm_component.h"
 #include "esphome/core/log.h"
 #include "esphome/components/uart/uart.h"
+#include "esphome/core/helpers.h"
 #include <algorithm>
 #include <cstring>
+#include <cmath>
 
 namespace esphome {
 namespace ghostuart {
@@ -13,7 +12,7 @@ namespace ghostuart {
 static const char *TAG = "ghostuart";
 
 // ------------------------------- Utility ------------------------------------
-// Calculate 8-bit LRC (two’s complement of byte sum)
+// Calculate 8-bit LRC (two's complement of byte sum)
 uint8_t GhostUARTComponent::calc_lrc_(const uint8_t *data, size_t len) {
   uint32_t s = 0;
   for (size_t i = 0; i < len; ++i) s += data[i];
@@ -21,37 +20,34 @@ uint8_t GhostUARTComponent::calc_lrc_(const uint8_t *data, size_t len) {
   return static_cast<uint8_t>((0x100 - sum8) & 0xFF);
 }
 
-static inline uint32_t ceil_div_u32(uint32_t a, uint32_t b) {
-  return (a + b - 1) / b;
-}
+// Recompute effective timings from observed character time on a given side.
+// Called only when cfg == 0 (auto) and we have a moving average estimate.
+void GhostUARTComponent::recompute_timing_(int dir_index) {
+  const auto &s = rx_[dir_index];
+  if (!s.have_char_time || s.char_time_us_ma < 50.0f) return;  // ignore unstable/no estimate
 
-// Automatically calculate timing values from baud rate (8E1 → 11 bits per char)
-void GhostUARTComponent::recompute_timing_() {
-  const uint32_t bits_per_char = 11;  // 8E1; also safe for 8N1 (10 bits)
-  // char_time_ms = 1000 * bits_per_char / baud_
-  uint32_t char_time_ms = (baud_ > 0) ? ceil_div_u32(1000 * bits_per_char, baud_) : 1;
+  // Convert to milliseconds
+  const float char_ms = s.char_time_us_ma / 1000.0f;
 
-  // Silence = 3.5 character times
+  // Silence: ~3.5 character times (clamped for practicality)
   if (silence_ms_cfg_ == 0) {
-    uint32_t auto_ms = static_cast<uint32_t>(std::ceil(3.5f * char_time_ms));
+    uint32_t auto_ms = static_cast<uint32_t>(std::ceil(3.5f * char_ms));
     if (auto_ms < 3) auto_ms = 3;
-    if (auto_ms > 30) auto_ms = 30;
+    if (auto_ms > 300) auto_ms = 300;  // allow larger clamp if very slow lines
     silence_ms_eff_ = auto_ms;
-  } else {
-    silence_ms_eff_ = silence_ms_cfg_;
   }
 
-  // Pre-listen = 0.75 character times (minimum 1 ms)
+  // Pre-listen: ~0.75 character times (min 1 ms)
   if (pre_listen_ms_cfg_ == 0) {
-    uint32_t auto_ms = static_cast<uint32_t>(std::lround(0.75f * char_time_ms));
+    uint32_t auto_ms = static_cast<uint32_t>(std::lround(0.75f * char_ms));
     if (auto_ms < 1) auto_ms = 1;
     pre_listen_ms_eff_ = auto_ms;
-  } else {
-    pre_listen_ms_eff_ = pre_listen_ms_cfg_;
   }
 
-  ESP_LOGI(TAG, "Timing recomputed – baud=%u, silence_ms=%u, pre_listen_ms=%u",
-           baud_, silence_ms_eff_, pre_listen_ms_eff_);
+  if (debug_enabled_) {
+    ESP_LOGD(TAG, "recompute_timing side=%d char_ms=%.3f -> silence_ms=%u pre_listen_ms=%u",
+             dir_index, char_ms, silence_ms_eff_, pre_listen_ms_eff_);
+  }
 }
 
 // ------------------------------ Public API ---------------------------------
@@ -75,14 +71,25 @@ bool GhostUARTComponent::send_template(const std::string &template_name,
   job.retries_left = DEFAULT_MAX_RETRIES;
   job.created_ms = millis();
   inject_queue_.push_back(job);
+  if (debug_enabled_) {
+    ESP_LOGD(TAG, "Enqueued inject template '%s' (overrides=%u)", template_name.c_str(), (unsigned)overrides.size());
+  }
   return true;
+}
+
+void GhostUARTComponent::set_debug(bool en) {
+  debug_enabled_ = en;
+  ESP_LOGI(TAG, "Debug %s", en ? "enabled" : "disabled");
 }
 
 // ------------------------------ Setup / Loop -------------------------------
 void GhostUARTComponent::setup() {
-  // Run auto-timing calculation if YAML values were not provided
-  recompute_timing_();
-  ESP_LOGI(TAG, "GhostUART setup – max_frame=%u", max_frame_);
+  // Initialize effective timings from config if explicitly set.
+  if (silence_ms_cfg_ != 0) silence_ms_eff_ = silence_ms_cfg_;
+  if (pre_listen_ms_cfg_ != 0) pre_listen_ms_eff_ = pre_listen_ms_cfg_;
+
+  ESP_LOGI(TAG, "GhostUART setup – max_frame=%u, silence=%u ms, pre_listen=%u ms, debug=%s",
+           max_frame_, silence_ms_eff_, pre_listen_ms_eff_, debug_enabled_ ? "true" : "false");
 }
 
 void GhostUARTComponent::loop() {
@@ -110,7 +117,7 @@ void GhostUARTComponent::loop() {
 }
 
 // ------------------------------ UART read ----------------------------------
-// Read all available bytes from one UART direction and store them in buffer
+// Read available bytes from one side, update adaptive timing, and collect into a frame buffer.
 void GhostUARTComponent::read_uart_(Direction dir) {
   uart::UARTComponent *rxu = rx_uart_(dir, uart_a_, uart_b_);
   if (!rxu) return;
@@ -119,19 +126,43 @@ void GhostUARTComponent::read_uart_(Direction dir) {
   while (true) {
     int r = rxu->read_array(buf, sizeof(buf));
     if (r <= 0) break;
+
     uint32_t now_ms = millis();
+    uint32_t now_us = micros();
     auto &s = rx_[static_cast<int>(dir)];
+
     for (int i = 0; i < r; ++i) {
+      // Adaptive timing: track inter-byte delta as moving average (per side)
+      if (s.last_byte_us != 0) {
+        uint32_t delta_us = now_us - s.last_byte_us;
+        const float alpha = 0.15f;  // EMA smoothing factor
+        if (!s.have_char_time) {
+          s.char_time_us_ma = static_cast<float>(delta_us);
+          s.have_char_time = true;
+        } else {
+          s.char_time_us_ma = (1.0f - alpha) * s.char_time_us_ma + alpha * static_cast<float>(delta_us);
+        }
+
+        // Recompute effective timings on-the-fly if cfg == 0 (auto)
+        if (silence_ms_cfg_ == 0 || pre_listen_ms_cfg_ == 0) {
+          recompute_timing_(static_cast<int>(dir));
+        }
+      }
+      s.last_byte_us = now_us;
+
+      // Buffer the byte
       if (s.buffer.size() < max_frame_) {
         s.buffer.push_back(buf[i]);
+        // store placeholder inter byte; we may expand later to store real deltas
         s.interbyte_us.push_back(1);
       } else {
-        // Overflow protection – drop oldest byte
+        // Overflow protection – drop oldest byte to keep most recent bytes
         s.buffer.erase(s.buffer.begin());
         s.buffer.push_back(buf[i]);
       }
+
       s.last_rx_ms = now_ms;
-      s.frame_ready = false;
+      s.frame_ready = false;  // reset frame-ready while receiving
     }
   }
 }
@@ -148,6 +179,7 @@ void GhostUARTComponent::on_silence_expired_(Direction dir) {
   s.frame_ready = false;
   frames_parsed_++;
 
+  // Parse → update stored variables, then forward the complete frame
   try {
     parse_and_store_(frame);
   } catch (...) {
@@ -169,7 +201,9 @@ void GhostUARTComponent::forward_frame_(Direction dir, const std::vector<uint8_t
 
   txu->write_array(frame.data(), frame.size());
   frames_forwarded_[static_cast<int>(dir)]++;
-  ESP_LOGD(TAG, "Forwarded %u bytes (direction=%d)", (unsigned)frame.size(), static_cast<int>(dir));
+  if (debug_enabled_) {
+    ESP_LOGD(TAG, "Forwarded %u bytes (direction=%d)", (unsigned)frame.size(), static_cast<int>(dir));
+  }
 }
 
 // ----------------------------- Parsing -------------------------------------
@@ -183,7 +217,9 @@ void GhostUARTComponent::parse_and_store_(const std::vector<uint8_t> &frame) {
       std::vector<uint8_t> raw;
       bool ok = decode_field_(fd, frame, val_str, val_scaled, raw);
       if (!ok) {
-        ESP_LOGD(TAG, "Failed to decode field '%s' (mapping '%s')", fd.name.c_str(), m.name.c_str());
+        if (debug_enabled_) {
+          ESP_LOGD(TAG, "Failed to decode field '%s' (mapping '%s')", fd.name.c_str(), m.name.c_str());
+        }
         continue;
       }
       StoredVar &sv = vars_[fd.name];
@@ -192,7 +228,9 @@ void GhostUARTComponent::parse_and_store_(const std::vector<uint8_t> &frame) {
       sv.last_raw = raw;
       sv.last_seen_ms = millis();
       sv.persistent = fd.persist;
-      ESP_LOGD(TAG, "Stored var %s = %s (raw=%uB)", fd.name.c_str(), val_str.c_str(), (unsigned)raw.size());
+      if (debug_enabled_) {
+        ESP_LOGD(TAG, "Stored var %s = %s (raw=%uB)", fd.name.c_str(), val_str.c_str(), (unsigned)raw.size());
+      }
     }
   }
 }
@@ -347,7 +385,7 @@ bool GhostUARTComponent::build_frame_from_template_(const FrameTemplate &tp,
 }
 
 // ------------------------ Inject queue processing --------------------------
-// Wait for bus idle, then send next frame from the injection queue
+// Wait for both sides to be idle, then send next frame from the injection queue
 bool GhostUARTComponent::bus_idle_() const {
   uint32_t now = millis();
   for (int d = 0; d < 2; ++d) {
@@ -372,8 +410,10 @@ void GhostUARTComponent::process_inject_queue_() {
     return;
   }
 
-  // Wait until both sides are idle
+  // Wait until both directions are idle
   if (!bus_idle_()) return;
+
+  // Short pre-listen
   delay(pre_listen_ms_eff_);
   if (!bus_idle_()) return;
 
@@ -384,7 +424,7 @@ void GhostUARTComponent::process_inject_queue_() {
     return;
   }
 
-  // Send on side B (typical remote emulation)
+  // Send on side B by default (typical "remote emulation" towards bus)
   uart::UARTComponent *txb = uart_b_;
   if (!txb) {
     ESP_LOGW(TAG, "No side B UART configured for inject");
