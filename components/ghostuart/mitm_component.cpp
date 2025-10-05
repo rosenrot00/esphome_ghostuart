@@ -202,7 +202,21 @@ void GhostUARTComponent::forward_frame_(Direction dir, const std::vector<uint8_t
   txu->write_array(frame.data(), frame.size());
   frames_forwarded_[static_cast<int>(dir)]++;
   if (debug_enabled_) {
-    ESP_LOGD(TAG, "Forwarded %u bytes (direction=%d)", (unsigned)frame.size(), static_cast<int>(dir));
+    // Build a short hex dump of up to the first 16 bytes
+    char hex[3 * 16 + 1];
+    int max_dump = frame.size() < 16 ? frame.size() : 16;
+    int idx = 0;
+    for (int i = 0; i < max_dump; ++i) {
+      idx += snprintf(&hex[idx], sizeof(hex) - idx, "%02X%s", frame[i], (i + 1 < max_dump ? " " : ""));
+      if (idx >= (int)sizeof(hex)) break;
+    }
+    hex[sizeof(hex) - 1] = '\0';
+
+    if ((int)frame.size() <= max_dump) {
+      ESP_LOGD(TAG, "Forwarded %u bytes (direction=%d) data=[%s]", (unsigned)frame.size(), static_cast<int>(dir), hex);
+    } else {
+      ESP_LOGD(TAG, "Forwarded %u bytes (direction=%d) data=[%s] ...", (unsigned)frame.size(), static_cast<int>(dir), hex);
+    }
   }
 }
 
