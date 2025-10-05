@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// esphome_ghostuart - Generic UART MITM for ESPHome (A/B sides)
+
 #include "mitm_component.h"
 #include "esphome/core/log.h"
 #include "esphome/components/uart/uart.h"
@@ -31,6 +34,11 @@ uint8_t GhostUARTComponent::calc_lrc_(const uint8_t *data, size_t len) {
   return static_cast<uint8_t>((0x100 - sum8) & 0xFF);
 }
 
+static inline uint32_t ceil_div_u32(uint32_t a, uint32_t b) {
+  return (a + b - 1) / b;
+}
+
+// Auto / YAML timing computation
 void GhostUARTComponent::recompute_timing_() {
   const uint32_t bits_per_char = 11;  // assume 8E1; safe for 8N1
   if (baud_ == 0) return;
@@ -110,7 +118,7 @@ void GhostUARTComponent::setup() {
 }
 
 void GhostUARTComponent::rx_task_tick() {
-  // Service both sides
+  // Service both sides (reads + small coalesce window)
   read_uart_(Direction::A_TO_B);
   read_uart_(Direction::B_TO_A);
 
@@ -131,7 +139,20 @@ void GhostUARTComponent::rx_task_tick() {
 }
 
 void GhostUARTComponent::loop() {
-  // RX/framing is handled in the dedicated RX task; process injection here
+  // Drain and process frames completed by the RX task
+  for (int d = 0; d < 2; ++d) {
+    Direction dir = static_cast<Direction>(d);
+    auto &q = ready_frames_[d];
+    while (!q.empty()) {
+      std::vector<uint8_t> frame = std::move(q.front());
+      q.erase(q.begin());
+      // Parse and forward now in loop context
+      parse_and_store_(frame);
+      forward_frame_(dir, frame);
+    }
+  }
+
+  // Then handle injection
   process_inject_queue_();
 }
 
@@ -146,8 +167,8 @@ void GhostUARTComponent::read_uart_(Direction dir) {
     int avail = rxu->available();
     if (avail <= 0) {
       // Coalesce: briefly wait for trailing bytes in a burst so we don't split frames
-      // into 1-byte chunks when loop() scheduling is slow.
-      const uint32_t coalesce_us = 15000; // ~15 ms ≈ ~16 chars @ 9600 Bd
+      // into 1-byte chunks when scheduling is slow.
+      const uint32_t coalesce_us = 30000; // ~30 ms (tuned to capture slow inter-byte gaps)
       uint32_t t0 = micros();
       bool got_more = false;
       while ((micros() - t0) < coalesce_us) {
@@ -174,6 +195,7 @@ void GhostUARTComponent::read_uart_(Direction dir) {
         s.buffer.push_back(buf[i]);
         s.interbyte_us.push_back(1);
       } else {
+        // keep window sliding if we've overflowed the configured max_frame_
         s.buffer.erase(s.buffer.begin());
         s.buffer.push_back(buf[i]);
       }
@@ -193,16 +215,19 @@ void GhostUARTComponent::on_silence_expired_(Direction dir) {
   auto &s = rx_[static_cast<int>(dir)];
   if (s.buffer.empty()) return;
 
-  std::vector<uint8_t> frame = s.buffer;
+  std::vector<uint8_t> frame = std::move(s.buffer);
   s.buffer.clear();
   s.interbyte_us.clear();
   s.frame_ready = false;
   frames_parsed_++;
 
-  // Parse and store: exceptions are disabled in ESPHome builds; call directly.
-  parse_and_store_(frame);
+  // Hand off the finished frame to loop() for parsing/forwarding
+  enqueue_ready_frame_(dir, std::move(frame));
+}
 
-  forward_frame_(dir, frame);
+// ------------------------ Ready frame queue (RX task -> loop) ---------------
+void GhostUARTComponent::enqueue_ready_frame_(Direction dir, std::vector<uint8_t> &&frame) {
+  ready_frames_[static_cast<int>(dir)].push_back(std::move(frame));
 }
 
 // ---------------------------- Forwarding -----------------------------------
