@@ -15,13 +15,13 @@
 namespace esphome {
 namespace ghostuart {
 
-// Defaults (können per YAML via Setter überschrieben werden)
+// Defaults (can be overridden via YAML setters)
 constexpr uint32_t DEFAULT_BAUD = 9600;
 constexpr uint16_t DEFAULT_MAX_FRAME = 512;
 constexpr uint16_t DEFAULT_RX_BUF = 4096;
 constexpr uint16_t DEFAULT_TX_BUF = 2048;
-constexpr uint32_t DEFAULT_SILENCE_MS = 15;   // 0 = Auto
-constexpr uint32_t DEFAULT_PRE_LISTEN_MS = 3; // 0 = Auto
+constexpr uint32_t DEFAULT_SILENCE_MS = 15;   // 0 = auto
+constexpr uint32_t DEFAULT_PRE_LISTEN_MS = 3; // 0 = auto
 constexpr uint8_t  DEFAULT_MAX_RETRIES = 2;
 
 enum class Direction : uint8_t { A_TO_B = 0, B_TO_A = 1 };
@@ -48,8 +48,8 @@ struct FrameSelector {
 };
 
 struct Mapping {
-  std::string                name;
-  FrameSelector              selector;
+  std::string                  name;
+  FrameSelector                selector;
   std::vector<FieldDescriptor> fields;
 };
 
@@ -89,10 +89,10 @@ class GhostUARTComponent : public Component {
   void set_uart_a(uart::UARTComponent *u) { uart_a_ = u; }
   void set_uart_b(uart::UARTComponent *u) { uart_b_ = u; }
 
-  // Gemeinsame Baudrate für A und B (für Auto-Berechnungen; UART selbst stellst du im YAML ein)
+  // Shared baud rate for A and B (used for auto timing; UARTs themselves are set in YAML)
   void set_baud(uint32_t baud) { baud_ = baud; recompute_timing_(); }
 
-  // Timing/config (YAML setter – 0 bedeutet Auto)
+  // Timing/config (YAML setters – 0 means auto)
   void set_silence_ms(uint32_t ms) { silence_ms_cfg_ = ms; recompute_timing_(); }
   void set_pre_listen_ms(uint32_t ms) { pre_listen_ms_cfg_ = ms; recompute_timing_(); }
   void set_max_frame(uint16_t n) { max_frame_ = n; }
@@ -125,9 +125,9 @@ class GhostUARTComponent : public Component {
   // Runtime config
   uint32_t baud_{DEFAULT_BAUD};
   uint16_t max_frame_{DEFAULT_MAX_FRAME};
-  uint32_t silence_ms_cfg_{DEFAULT_SILENCE_MS};    // 0 = Auto
-  uint32_t pre_listen_ms_cfg_{DEFAULT_PRE_LISTEN_MS}; // 0 = Auto
-  uint32_t silence_ms_eff_{DEFAULT_SILENCE_MS};    // effektiv nach Auto-Berechnung
+  uint32_t silence_ms_cfg_{DEFAULT_SILENCE_MS};       // 0 = auto
+  uint32_t pre_listen_ms_cfg_{DEFAULT_PRE_LISTEN_MS}; // 0 = auto
+  uint32_t silence_ms_eff_{DEFAULT_SILENCE_MS};       // effective value after auto calculation
   uint32_t pre_listen_ms_eff_{DEFAULT_PRE_LISTEN_MS};
 
   // RX state
@@ -138,7 +138,7 @@ class GhostUARTComponent : public Component {
     bool     frame_ready{false};
   } rx_[2];
 
-  // Inject
+  // Injection
   std::vector<InjectJob> inject_queue_;
   bool inject_enabled_{false};
 
@@ -174,7 +174,7 @@ class GhostUARTComponent : public Component {
   void process_inject_queue_();
 
   bool bus_idle_() const;
-  void recompute_timing_(); // Auto: aus baud_ ableiten
+  void recompute_timing_(); // Auto: derive from baud_
 
   static uart::UARTComponent *rx_uart_(Direction dir, uart::UARTComponent *a, uart::UARTComponent *b) {
     return (dir == Direction::A_TO_B) ? a : b;
