@@ -20,33 +20,30 @@ uint8_t GhostUARTComponent::calc_lrc_(const uint8_t *data, size_t len) {
   return static_cast<uint8_t>((0x100 - sum8) & 0xFF);
 }
 
-// Recompute effective timings from baud rate (for auto timing).
+// Recompute timings: force fixed silence/pre-listen times based on baud only.
 void GhostUARTComponent::recompute_timing_() {
-  // Compute character time from configured baud (assume 8E1 → 11 bits/char; conservative for 8N1)
-  const uint32_t bits_per_char = 11;
+  // Fixed-character timing:
+  // - Silence = 3 character times (hard-coded)
+  // - Pre-listen = 0.75 character times
+  const uint32_t bits_per_char = 11;  // assume 8E1; safe for 8N1
   if (baud_ == 0) return;
-  float char_ms = (1000.0f * bits_per_char) / static_cast<float>(baud_);
 
-  if (silence_ms_cfg_ == 0) {
-    uint32_t auto_ms = static_cast<uint32_t>(std::ceil(3.5f * char_ms));
-    if (auto_ms < 3) auto_ms = 3;
-    if (auto_ms > 300) auto_ms = 300;
-    silence_ms_eff_ = auto_ms;
-  } else {
-    silence_ms_eff_ = silence_ms_cfg_;
-  }
+  const float char_ms = (1000.0f * bits_per_char) / static_cast<float>(baud_);
 
-  if (pre_listen_ms_cfg_ == 0) {
-    uint32_t auto_ms = static_cast<uint32_t>(std::lround(0.75f * char_ms));
-    if (auto_ms < 1) auto_ms = 1;
-    pre_listen_ms_eff_ = auto_ms;
-  } else {
-    pre_listen_ms_eff_ = pre_listen_ms_cfg_;
-  }
+  // Hard-code to 3 chars silence
+  uint32_t silence_ms = static_cast<uint32_t>(std::ceil(3.0f * char_ms));
+  if (silence_ms < 1) silence_ms = 1;
+  if (silence_ms > 300) silence_ms = 300;
+  silence_ms_eff_ = silence_ms;
+
+  // Hard-code pre-listen to 0.75 char
+  uint32_t pre_ms = static_cast<uint32_t>(std::lround(0.75f * char_ms));
+  if (pre_ms < 1) pre_ms = 1;
+  pre_listen_ms_eff_ = pre_ms;
 
   if (debug_enabled_) {
-    ESP_LOGD(TAG, "recompute_timing baud=%u char_ms=%.3f -> silence_ms=%u pre_listen_ms=%u",
-             baud_, char_ms, silence_ms_eff_, pre_listen_ms_eff_);
+    ESP_LOGD(TAG, "recompute_timing (fixed chars) baud=%u char_ms=%.3f -> silence=%.3f char (~%u ms) pre_listen=0.75 char (~%u ms)",
+             baud_, char_ms, 3.0f, silence_ms_eff_, pre_listen_ms_eff_);
   }
 }
 
