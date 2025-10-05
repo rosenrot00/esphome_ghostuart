@@ -124,7 +124,8 @@ class GhostUARTComponent : public Component {
 
   // Service RX and close frames on idle (called from the dedicated RX task)
   void rx_task_tick();
-
+  // Query RX task enabled state (used by the static RX task)
+  bool rx_task_is_enabled() const { return rx_task_enabled_; }
   // Enable/disable the RX task (e.g., suspend during OTA)
   void set_rx_task_enabled(bool en);
 
