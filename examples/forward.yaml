@@ -1,0 +1,51 @@
+esphome:
+  name: ghostuart_sniffer
+  platform: ESP32
+  board: esp32dev
+
+external_components:
+  - source: github://youruser/esphome_ghostuart
+    components: [ ghostuart ]
+
+uart:
+  - id: uart_a
+    tx_pin: GPIO17     # to device A RX
+    rx_pin: GPIO16     # from device A TX
+    baud_rate: 9600
+    parity: EVEN
+  - id: uart_b
+    tx_pin: GPIO4      # to device B RX
+    rx_pin: GPIO2      # from device B TX
+    baud_rate: 9600
+    parity: EVEN
+
+logger:
+  level: DEBUG
+
+ghostuart:
+  id: ghost
+  uart_a: uart_a
+  uart_b: uart_b
+  max_frame: 512
+  silence_ms: 0          # 0 = auto-learn per-side from inter-byte timing
+  pre_listen_ms: 0       # 0 = auto
+  debug: true            # initial debug enabled; toggleable in UI
+
+# Debug toggle (appears in ESPHome web UI and in Home Assistant)
+switch:
+  - platform: template
+    id: ghost_debug
+    name: "GhostUART – Debug"
+    optimistic: true
+    entity_category: diagnostic
+    restore_mode: RESTORE_DEFAULT_OFF
+    on_turn_on:
+      then:
+        - lambda: |-
+            id(ghost).set_debug(true);
+    on_turn_off:
+      then:
+        - lambda: |-
+            id(ghost).set_debug(false);
+
+# No injection switch or buttons here — this config is passive only.
