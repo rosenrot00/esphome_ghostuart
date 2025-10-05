@@ -18,7 +18,7 @@ static void ghostuart_rx_task(void *param) {
   const TickType_t tick_1ms = pdMS_TO_TICKS(1);
   for (;;) {
     // if RX task is disabled, sleep longer and continue
-    if (!self->rx_task_enabled_) {
+    if (!self->rx_task_is_enabled()) {
       vTaskDelay(pdMS_TO_TICKS(50));
       continue;
     }
@@ -464,9 +464,6 @@ void GhostUARTComponent::process_inject_queue_() {
   inject_queue_.erase(inject_queue_.begin());
 }
 
-// --------------------------------- EOF ------------------------------------
-}  // namespace ghostuart
-}  // namespace esphome
 void GhostUARTComponent::set_rx_task_enabled(bool en) {
   rx_task_enabled_ = en;
   if (rx_task_handle_ == nullptr) return;
@@ -478,3 +475,6 @@ void GhostUARTComponent::set_rx_task_enabled(bool en) {
     ESP_LOGI(TAG, "RX task resumed");
   }
 }
+// --------------------------------- EOF ------------------------------------
+}  // namespace ghostuart
+}  // namespace esphome
