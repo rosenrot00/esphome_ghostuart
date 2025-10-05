@@ -20,6 +20,7 @@ constexpr uint16_t DEFAULT_TX_BUF = 2048;
 constexpr uint32_t DEFAULT_SILENCE_MS = 15;        // 0 = auto
 constexpr uint32_t DEFAULT_PRE_LISTEN_MS = 3;      // 0 = auto
 constexpr uint8_t  DEFAULT_MAX_RETRIES = 2;
+constexpr uint16_t DEFAULT_MIN_FRAME_LEN = 0;
 
 enum class Direction : uint8_t { A_TO_B = 0, B_TO_A = 1 };
 
@@ -86,10 +87,16 @@ class GhostUARTComponent : public Component {
   void set_uart_a(uart::UARTComponent *u) { uart_a_ = u; }
   void set_uart_b(uart::UARTComponent *u) { uart_b_ = u; }
 
+  // Shared baud rate for A and B; used to compute auto timings when silence_ms/pre_listen_ms == 0
+  void set_baud(uint32_t baud) { baud_ = baud; recompute_timing_(); }
+
   // Timing/config (YAML setters – 0 means auto)
-  void set_silence_ms(uint32_t ms) { silence_ms_cfg_ = ms; recompute_timing_(0); recompute_timing_(1); }
-  void set_pre_listen_ms(uint32_t ms) { pre_listen_ms_cfg_ = ms; recompute_timing_(0); recompute_timing_(1); }
+  void set_silence_ms(uint32_t ms) { silence_ms_cfg_ = ms; recompute_timing_(); }
+  void set_pre_listen_ms(uint32_t ms) { pre_listen_ms_cfg_ = ms; recompute_timing_(); }
   void set_max_frame(uint16_t n) { max_frame_ = n; }
+
+  // Noise filter – minimum accepted frame length (frames shorter than this are dropped)
+  void set_min_frame_len(uint16_t n) { min_frame_len_ = n; }
 
   // Debug control
   void set_debug(bool en);
@@ -121,11 +128,13 @@ class GhostUARTComponent : public Component {
   uart::UARTComponent *uart_b_{nullptr}; // side B
 
   // Runtime config
+  uint32_t baud_{DEFAULT_BAUD};
   uint16_t max_frame_{DEFAULT_MAX_FRAME};
-  uint32_t silence_ms_cfg_{DEFAULT_SILENCE_MS};       // 0 = auto
-  uint32_t pre_listen_ms_cfg_{DEFAULT_PRE_LISTEN_MS}; // 0 = auto
+  uint32_t silence_ms_cfg_{DEFAULT_SILENCE_MS};       // 0 = auto (from baud)
+  uint32_t pre_listen_ms_cfg_{DEFAULT_PRE_LISTEN_MS}; // 0 = auto (from baud)
   uint32_t silence_ms_eff_{DEFAULT_SILENCE_MS};       // effective value after auto calculation
   uint32_t pre_listen_ms_eff_{DEFAULT_PRE_LISTEN_MS};
+  uint16_t min_frame_len_{DEFAULT_MIN_FRAME_LEN};     // short-frame noise filter
 
   // RX state (per-direction)
   struct RxState {
@@ -133,11 +142,6 @@ class GhostUARTComponent : public Component {
     std::vector<uint16_t> interbyte_us;
     uint32_t last_rx_ms{0};
     bool     frame_ready{false};
-
-    // Adaptive timing fields
-    uint32_t last_byte_us{0};
-    float    char_time_us_ma{0.0f};   // moving average of inter-byte microseconds
-    bool     have_char_time{false};
   } rx_[2];
 
   // Injection
@@ -179,7 +183,7 @@ class GhostUARTComponent : public Component {
   void process_inject_queue_();
 
   bool bus_idle_() const;
-  void recompute_timing_(int dir_index); // derive effective timing for a side from observed char time
+  void recompute_timing_(); // derive effective timing from configured baud
 
   static uart::UARTComponent *rx_uart_(Direction dir, uart::UARTComponent *a, uart::UARTComponent *b) {
     return (dir == Direction::A_TO_B) ? a : b;
