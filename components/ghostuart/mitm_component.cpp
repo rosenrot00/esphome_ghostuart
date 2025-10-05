@@ -128,7 +128,21 @@ void GhostUARTComponent::read_uart_(Direction dir) {
   uint8_t buf[128];
   while (true) {
     int avail = rxu->available();
-    if (avail <= 0) break;
+    if (avail <= 0) {
+      // Coalesce: briefly wait for trailing bytes in a burst so we don't split frames
+      // into 1-byte chunks when loop() scheduling is slow.
+      const uint32_t coalesce_us = 2000; // ~2 ms ≈ ~2 chars @ 9600 Bd
+      uint32_t t0 = micros();
+      bool got_more = false;
+      while ((micros() - t0) < coalesce_us) {
+        int a2 = rxu->available();
+        if (a2 > 0) { got_more = true; break; }
+        delayMicroseconds(200);
+      }
+      if (!got_more) break; // truly nothing more to read now
+      avail = rxu->available();
+      if (avail <= 0) break;
+    }
 
     int to_read = avail;
     if (to_read > static_cast<int>(sizeof(buf))) to_read = sizeof(buf);
