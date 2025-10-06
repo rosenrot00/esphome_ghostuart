@@ -99,6 +99,9 @@ class GhostUARTComponent : public Component {
   void set_pre_listen_ms(uint32_t ms) { pre_listen_ms_cfg_ = ms; recompute_timing_(); }
   void set_max_frame(uint16_t n) { max_frame_ = n; }
 
+  // Parity: 0=None, 1=Even, 2=Odd
+  void set_parity_mode(uint8_t m) { parity_mode_ = m; }
+
   // IDF driver mode (optional): switch to native ESP-IDF UART driver + event-queue
   void set_use_idf_driver(bool en) { use_idf_driver_ = en; }
   void set_idf_uart_nums(int a, int b) { idf_uart_num_a_ = a; idf_uart_num_b_ = b; }
@@ -152,6 +155,7 @@ class GhostUARTComponent : public Component {
   uint32_t pre_listen_ms_cfg_{DEFAULT_PRE_LISTEN_MS}; // 0 = auto (from baud)
   uint32_t silence_ms_eff_{DEFAULT_SILENCE_MS};       // effective value after auto calculation
   uint32_t pre_listen_ms_eff_{DEFAULT_PRE_LISTEN_MS};
+  uint8_t parity_mode_{1};  // 0=None, 1=Even (default), 2=Odd
 
   // RX state (per-direction)
   struct RxState {
