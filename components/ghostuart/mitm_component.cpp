@@ -178,7 +178,25 @@ void GhostUARTComponent::loop() {
     while (!q.empty()) {
       std::vector<uint8_t> frame = std::move(q.front());
       q.erase(q.begin());
-      // Parse and forward now in loop context
+      if (debug_enabled_) {
+        // Build a short hex dump of up to 32 bytes
+        char hex_rx[3 * 32 + 1];
+        int max_dump_rx = frame.size() < 32 ? frame.size() : 32;
+        int idx_rx = 0;
+        for (int i = 0; i < max_dump_rx; ++i) {
+            idx_rx += snprintf(&hex_rx[idx_rx], sizeof(hex_rx) - idx_rx,
+                            "%02X%s", frame[i], (i + 1 < max_dump_rx ? " " : ""));
+            if (idx_rx >= (int)sizeof(hex_rx)) break;
+        }
+        hex_rx[sizeof(hex_rx) - 1] = '\0';
+
+        // dir==A_TO_B bedeutet: empfangen auf A, weiter nach B -> Label RX(A)
+        ESP_LOGD(TAG, "RX(%c) %u bytes data=[%s]%s",
+                (dir == Direction::A_TO_B ? 'A' : 'B'),
+                (unsigned)frame.size(),
+                hex_rx,
+                (frame.size() > (size_t)max_dump_rx ? " ..." : ""));
+        }
       parse_and_store_(frame);
       forward_frame_(dir, frame);
     }
@@ -242,11 +260,6 @@ void GhostUARTComponent::on_silence_expired_(Direction dir) {
   s.interbyte_us.clear();
   s.frame_ready = false;
   frames_parsed_++;
-
-  if (debug_enabled_) {
-    ESP_LOGD(TAG, "[%c] Frame closed len=%u",
-             (dir == Direction::A_TO_B ? 'A' : 'B'), (unsigned)frame.size());
-  }
 
   // Enqueue for loop() to process (parse + forward)
   enqueue_ready_frame_(dir, std::move(frame));
@@ -635,10 +648,6 @@ void GhostUARTComponent::idf_service_events_(int uart_num, QueueHandle_t queue, 
           std::vector<uint8_t> tmp(rxlen);
           int r = uart_read_bytes(static_cast<uart_port_t>(uart_num), tmp.data(), rxlen, 0);
           if (r > 0) {
-            if (debug_enabled_) {
-                ESP_LOGD(TAG, "[%c] RX %d bytes (UART%d)",
-                        (dir == Direction::A_TO_B ? 'A' : 'B'), r, uart_num);
-            }
             auto &s = rx_[static_cast<int>(dir)];
             uint32_t now_ms = millis();
             for (int i = 0; i < r; ++i) {
