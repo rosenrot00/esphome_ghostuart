@@ -18,6 +18,10 @@ CONF_MAX_RETRIES = "max_retries"
 CONF_DEBUG = "debug"
 CONF_BAUD = "baud"
 
+# Parity option (NONE/EVEN/ODD)
+CONF_PARITY = "parity"
+PARITY_MAP = {"NONE": 0, "EVEN": 1, "ODD": 2}
+
 # IDF driver mode parameters
 CONF_USE_IDF_DRIVER = "use_idf_driver"
 CONF_IDF_UART_NUMS = "idf_uart_nums"                # [num_a, num_b]
@@ -41,6 +45,7 @@ CONFIG_SCHEMA = cv.Schema(
         cv.Optional(CONF_MAX_RETRIES, default=2): cv.int_range(min=0, max=10),
         cv.Optional(CONF_DEBUG, default=False): cv.boolean,
         cv.Optional(CONF_BAUD, default=9600): cv.int_range(min=300, max=1000000),
+        cv.Optional(CONF_PARITY, default="EVEN"): cv.one_of("NONE", "EVEN", "ODD", upper=True),
 
         # IDF driver mode
         cv.Optional(CONF_USE_IDF_DRIVER, default=False): cv.boolean,
@@ -88,6 +93,10 @@ async def to_code(config):
     cg.add(var.set_silence_ms(config[CONF_SILENCE_MS]))
     cg.add(var.set_pre_listen_ms(config[CONF_PRE_LISTEN_MS]))
     cg.add(var.set_debug(config[CONF_DEBUG]))
+
+    # Parity mapping to C++
+    if CONF_PARITY in config:
+        cg.add(var.set_parity_mode(PARITY_MAP[config[CONF_PARITY]]))
 
     # IDF / native driver mode
     if CONF_USE_IDF_DRIVER in config:
