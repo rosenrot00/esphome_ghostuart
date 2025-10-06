@@ -299,7 +299,7 @@ void GhostUARTComponent::forward_frame_(Direction dir, const std::vector<uint8_t
     return;
   }
   txu->write_array(frame.data(), frame.size());
-  frames_forwarded_[static_cast<int](dir)]++;
+  frames_forwarded_[static_cast<int>(dir)]++;
 }
 
 // ----------------------------- Parsing -------------------------------------
