@@ -3,7 +3,6 @@
 
 #include "mitm_component.h"
 #include "esphome/core/log.h"
-#include "esphome/components/uart/uart.h"
 #include "esphome/core/helpers.h"
 
 #include <algorithm>
@@ -136,29 +135,11 @@ void GhostUARTComponent::setup() {
 }
 
 void GhostUARTComponent::rx_task_tick() {
-  // IDF mode: service hardware event queues
-  if (use_idf_driver_) {
-    if (idf_driver_installed_a_ && idf_uart_queue_a_) idf_service_events_(idf_uart_num_a_, idf_uart_queue_a_, Direction::A_TO_B);
-    if (idf_driver_installed_b_ && idf_uart_queue_b_) idf_service_events_(idf_uart_num_b_, idf_uart_queue_b_, Direction::B_TO_A);
+  // Only IDF driver mode is supported; service hardware event queues
+  if (idf_driver_installed_a_ && idf_uart_queue_a_) idf_service_events_(idf_uart_num_a_, idf_uart_queue_a_, Direction::A_TO_B);
+  if (idf_driver_installed_b_ && idf_uart_queue_b_) idf_service_events_(idf_uart_num_b_, idf_uart_queue_b_, Direction::B_TO_A);
 
-    // Safety net: if events missed, fallback to silence_ms-based close
-    uint32_t now_ms = millis();
-    for (int d = 0; d < 2; ++d) {
-      Direction dir = static_cast<Direction>(d);
-      auto &s = rx_[d];
-      if (!s.buffer.empty() && (now_ms - s.last_rx_ms) >= silence_ms_eff_ && !s.frame_ready) {
-        s.frame_ready = true;
-        on_silence_expired_(dir);
-      }
-    }
-    return;
-  }
-
-  // Legacy path (ESPHome UARTComponent)
-  read_uart_(Direction::A_TO_B);
-  read_uart_(Direction::B_TO_A);
-
-  // Close frames on silence
+  // After draining events, check idle closure (as a safety net)
   uint32_t now_ms = millis();
   for (int d = 0; d < 2; ++d) {
     Direction dir = static_cast<Direction>(d);
@@ -206,48 +187,7 @@ void GhostUARTComponent::loop() {
   process_inject_queue_();
 }
 
-// ------------------------------ UART read (legacy) --------------------------
-// Read available bytes from one side (using ESPHome UARTComponent)
-void GhostUARTComponent::read_uart_(Direction dir) {
-  uart::UARTComponent *rxu = rx_uart_(dir, uart_a_, uart_b_);
-  if (!rxu) return;
 
-  uint8_t buf[128];
-  while (true) {
-    int avail = rxu->available();
-    if (avail <= 0) {
-      // small delay to coalesce trailing bytes without busy spinning
-      vTaskDelay(pdMS_TO_TICKS(2));
-      avail = rxu->available();
-      if (avail <= 0) break;
-    }
-
-    int to_read = avail;
-    if (to_read > static_cast<int>(sizeof(buf))) to_read = sizeof(buf);
-
-    int r = rxu->read_array(buf, to_read);
-    if (r <= 0) break;
-
-    uint32_t now_ms = millis();
-    auto &s = rx_[static_cast<int>(dir)];
-
-    for (int i = 0; i < r; ++i) {
-      if (s.buffer.size() < max_frame_) {
-        s.buffer.push_back(buf[i]);
-        s.interbyte_us.push_back(1);
-      } else {
-        // protect buffer overflow: drop oldest
-        s.buffer.erase(s.buffer.begin());
-        s.buffer.push_back(buf[i]);
-      }
-      s.last_rx_ms = now_ms;
-      s.frame_ready = false;
-    }
-
-    // yield to keep system responsive
-    delay(0);
-  }
-}
 
 // ---------------------------- Silence expired ------------------------------
 // Called by RX task when a frame is closed (no new bytes for silence_ms_eff_)
@@ -289,30 +229,17 @@ void GhostUARTComponent::forward_frame_(Direction dir, const std::vector<uint8_t
              (frame.size() > (size_t)max_dump ? " ..." : ""));
   }
 
-  // IDF TX path if native driver is active
-  if (use_idf_driver_) {
-    int port = (dir == Direction::A_TO_B) ? idf_uart_num_b_ : idf_uart_num_a_;
-    bool installed = (dir == Direction::A_TO_B) ? idf_driver_installed_b_ : idf_driver_installed_a_;
-    if (port < 0 || !installed) {
-      ESP_LOGW(TAG, "TX IDF port not ready (port=%d, installed=%d)", port, (int)installed);
-      return;
-    }
-    int written = uart_write_bytes((uart_port_t)port, frame.data(), frame.size());
-    if (written < 0) {
-      ESP_LOGW(TAG, "uart_write_bytes failed on UART%d (len=%u)", port, (unsigned)frame.size());
-      return;
-    }
-    frames_forwarded_[static_cast<int>(dir)]++;
+  int port = (dir == Direction::A_TO_B) ? idf_uart_num_b_ : idf_uart_num_a_;
+  bool installed = (dir == Direction::A_TO_B) ? idf_driver_installed_b_ : idf_driver_installed_a_;
+  if (port < 0 || !installed) {
+    ESP_LOGW(TAG, "TX IDF port not ready (port=%d, installed=%d)", port, (int)installed);
     return;
   }
-
-  // Legacy ESPHome path
-  uart::UARTComponent *txu = tx_uart_(dir, uart_a_, uart_b_);
-  if (!txu) {
-    ESP_LOGW(TAG, "TX UART not configured (A/B)");
+  int written = uart_write_bytes((uart_port_t)port, frame.data(), frame.size());
+  if (written < 0) {
+    ESP_LOGW(TAG, "uart_write_bytes failed on UART%d (len=%u)", port, (unsigned)frame.size());
     return;
   }
-  txu->write_array(frame.data(), frame.size());
   frames_forwarded_[static_cast<int>(dir)]++;
 }
 
@@ -536,15 +463,19 @@ void GhostUARTComponent::process_inject_queue_() {
     return;
   }
 
-  // Send on side B (typical remote emulation)
-  uart::UARTComponent *txb = uart_b_;
-  if (!txb) {
-    ESP_LOGW(TAG, "No side B UART configured for inject");
+  // Send on side B (typical remote emulation) via IDF driver
+  int port = idf_uart_num_b_;
+  if (port < 0 || !idf_driver_installed_b_) {
+    ESP_LOGW(TAG, "IDF TX not ready for B (port=%d, installed=%d)", port, (int)idf_driver_installed_b_);
     inject_queue_.erase(inject_queue_.begin());
     return;
   }
-
-  txb->write_array(frame.data(), frame.size());
+  int written = uart_write_bytes((uart_port_t)port, frame.data(), frame.size());
+  if (written < 0) {
+    ESP_LOGW(TAG, "uart_write_bytes failed for inject on UART%d (len=%u)", port, (unsigned)frame.size());
+    inject_queue_.erase(inject_queue_.begin());
+    return;
+  }
   ESP_LOGI(TAG, "Injected frame (%u bytes) via template '%s'", (unsigned)frame.size(), job.template_name.c_str());
 
   inject_queue_.erase(inject_queue_.begin());
