@@ -546,7 +546,12 @@ bool GhostUARTComponent::idf_init_uart_(int uart_num, int tx_pin, int rx_pin,
   cfg.parity = UART_PARITY_EVEN;   // defaulting to EVEN; change if necessary
   cfg.stop_bits = UART_STOP_BITS_1;
   cfg.flow_ctrl = UART_HW_FLOWCTRL_DISABLE;
-  cfg.source_clk = UART_SCLK_APB;
+  // Some ESP-IDF versions don’t expose UART_SCLK_APB; leave default if unavailable
+  #ifdef UART_SCLK_APB
+    cfg.source_clk = UART_SCLK_APB;
+  #elif defined(UART_SCLK_DEFAULT)
+    cfg.source_clk = UART_SCLK_DEFAULT;
+  #endif
 
   esp_err_t err = uart_param_config(static_cast<uart_port_t>(uart_num), &cfg);
   if (err != ESP_OK) {
@@ -615,9 +620,9 @@ void GhostUARTComponent::idf_service_events_(int uart_num, QueueHandle_t queue, 
         }
         break;
       }
-      case UART_RXFIFO_TOUT:
+      // Removed UART_RXFIFO_TOUT event; rely on silence close and BREAK event.
       case UART_BREAK: {
-        // Hardware idle or break — close current frame immediately
+        // Hardware idle/break → close frame immediately
         auto &s = rx_[static_cast<int>(dir)];
         if (!s.buffer.empty() && !s.frame_ready) {
           s.frame_ready = true;
