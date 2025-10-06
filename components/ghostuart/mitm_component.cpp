@@ -242,10 +242,6 @@ void GhostUARTComponent::on_silence_expired_(Direction dir) {
   s.interbyte_us.clear();
   s.frame_ready = false;
   frames_parsed_++;
-    if (debug_enabled_) {
-    ESP_LOGD(TAG, "[%c] Frame closed len=%u",
-            (dir == Direction::A_TO_B ? 'A' : 'B'), (unsigned)frame.size());
-    }
     enqueue_ready_frame_(dir, std::move(frame));
 }
 
@@ -277,12 +273,20 @@ void GhostUARTComponent::forward_frame_(Direction dir, const std::vector<uint8_t
 
   // IDF TX path if native driver is active
   if (use_idf_driver_) {
-    // A->B => TX auf UART B; B->A => TX auf UART A
-    int port = (dir == Direction::A_TO_B) ? idf_uart_num_b_ : idf_uart_num_a_;
-    if (port < 0) {
-      ESP_LOGW(TAG, "TX IDF port not set (A/B)");
-      return;
-    }
+  int port = (dir == Direction::A_TO_B) ? idf_uart_num_b_ : idf_uart_num_a_;
+  bool installed = (dir == Direction::A_TO_B) ? idf_driver_installed_b_ : idf_driver_installed_a_;
+  if (port < 0 || !installed) {
+    ESP_LOGW(TAG, "TX IDF port not ready (port=%d, installed=%d)", port, (int)installed);
+    return;
+  }
+  int written = uart_write_bytes((uart_port_t)port, frame.data(), frame.size());
+  if (written < 0) {
+    ESP_LOGW(TAG, "uart_write_bytes failed on UART%d (len=%u)", port, (unsigned)frame.size());
+    return;
+  }
+  frames_forwarded_[static_cast<int>(dir)]++;
+  return;
+}
     int written = uart_write_bytes((uart_port_t)port, frame.data(), frame.size());
     if (written < 0) {
       ESP_LOGW(TAG, "uart_write_bytes failed on UART%d", port);
@@ -591,20 +595,27 @@ bool GhostUARTComponent::idf_init_uart_(int uart_num, int tx_pin, int rx_pin,
 
   // Install driver with RX buffer and an event queue (small queue depth)
   // tx buffer set to 0 (we use uart_write_bytes via driver when needed)
-  err = uart_driver_install(static_cast<uart_port_t>(uart_num), static_cast<int>(rx_buf), 0, 20, &out_queue, 0);
-  if (err != ESP_OK) {
+  // Install driver with RX and a small TX buffer; create an event queue
+    err = uart_driver_install(static_cast<uart_port_t>(uart_num), static_cast<int>(rx_buf), 256, 20, &out_queue, 0);
+    if (err != ESP_OK) {
     ESP_LOGE(TAG, "%s: uart_driver_install err=%d", side_tag, (int)err);
     return false;
-  }
+    }
 
-  // Configure RX timeout in chars (idle detection)
-  if (timeout_chars > 0) {
+    // Ensure UART mode is normal UART (not RS485 etc.)
+    err = uart_set_mode(static_cast<uart_port_t>(uart_num), UART_MODE_UART);
+    if (err != ESP_OK) {
+    ESP_LOGW(TAG, "%s: uart_set_mode err=%d", side_tag, (int)err);
+    }
+
+    // Configure RX timeout in chars (idle detection)
+    if (timeout_chars > 0) {
     err = uart_set_rx_timeout(static_cast<uart_port_t>(uart_num), timeout_chars);
     if (err != ESP_OK) {
-      ESP_LOGE(TAG, "%s: uart_set_rx_timeout err=%d", side_tag, (int)err);
-      // not fatal — continue
+        ESP_LOGE(TAG, "%s: uart_set_rx_timeout err=%d", side_tag, (int)err);
+        // not fatal — continue
     }
-  }
+    }
 
   ESP_LOGI(TAG, "%s: IDF UART%d init ok (baud=%u, timeout_chars=%u, rx_buf=%u)", side_tag, uart_num, baud_, timeout_chars, (unsigned)rx_buf);
   return true;
