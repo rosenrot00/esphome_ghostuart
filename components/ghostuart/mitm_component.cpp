@@ -5,7 +5,6 @@
 #include "esphome/core/log.h"
 #include "esphome/core/helpers.h"
 
-#include <algorithm>
 #include <cstring>
 #include <cmath>
 
@@ -41,9 +40,6 @@ uint8_t GhostUARTComponent::calc_lrc_(const uint8_t *data, size_t len) {
   return static_cast<uint8_t>((0x100 - sum8) & 0xFF);
 }
 
-static inline uint32_t ceil_div_u32(uint32_t a, uint32_t b) {
-  return (a + b - 1) / b;
-}
 
 // Auto / YAML timing computation
 void GhostUARTComponent::recompute_timing_() {
@@ -197,7 +193,6 @@ void GhostUARTComponent::on_silence_expired_(Direction dir) {
 
   std::vector<uint8_t> frame = std::move(s.buffer);
   s.buffer.clear();
-  s.interbyte_us.clear();
   s.frame_ready = false;
   frames_parsed_++;
 
@@ -507,7 +502,12 @@ bool GhostUARTComponent::idf_init_uart_(int uart_num, int tx_pin, int rx_pin,
   uart_config_t cfg{};
   cfg.baud_rate = static_cast<int>(baud_);
   cfg.data_bits = UART_DATA_8_BITS;
-  cfg.parity = UART_PARITY_EVEN;   // defaulting to EVEN; change if necessary
+  // Set parity based on parity_mode_
+  switch (parity_mode_) {
+    case 0: cfg.parity = UART_PARITY_DISABLE; break; // NONE
+    case 2: cfg.parity = UART_PARITY_ODD;     break; // ODD
+    case 1: default: cfg.parity = UART_PARITY_EVEN;  break; // EVEN
+  }
   cfg.stop_bits = UART_STOP_BITS_1;
   cfg.flow_ctrl = UART_HW_FLOWCTRL_DISABLE;
   // Some ESP-IDF versions don’t expose UART_SCLK_APB; leave default if unavailable
