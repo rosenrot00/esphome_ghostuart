@@ -18,12 +18,12 @@ namespace esphome {
 namespace ghostuart {
 
 // Defaults (can be overridden via YAML setters)
-constexpr uint32_t DEFAULT_BAUD = 9600;            // retained as historical default (not used in adaptive mode)
+constexpr uint32_t DEFAULT_BAUD = 9600;
 constexpr uint16_t DEFAULT_MAX_FRAME = 512;
 constexpr uint16_t DEFAULT_RX_BUF = 4096;
 constexpr uint16_t DEFAULT_TX_BUF = 2048;
-constexpr uint32_t DEFAULT_SILENCE_MS = 15;        // 0 = auto
-constexpr uint32_t DEFAULT_PRE_LISTEN_MS = 3;      // 0 = auto
+constexpr uint32_t DEFAULT_SILENCE_MS = 15;        // 0 = auto (from baud)
+constexpr uint32_t DEFAULT_PRE_LISTEN_MS = 3;      // 0 = auto (from baud)
 constexpr uint8_t  DEFAULT_MAX_RETRIES = 2;
 
 enum class Direction : uint8_t { A_TO_B = 0, B_TO_A = 1 };
@@ -104,6 +104,8 @@ class GhostUARTComponent : public Component {
   void set_idf_uart_nums(int a, int b) { idf_uart_num_a_ = a; idf_uart_num_b_ = b; }
   void set_idf_rx_bufs(uint32_t a, uint32_t b) { idf_rx_buf_a_ = a; idf_rx_buf_b_ = b; }
   void set_idf_rx_timeout_chars(uint8_t a, uint8_t b) { idf_rx_timeout_chars_a_ = a; idf_rx_timeout_chars_b_ = b; }
+  void set_idf_uart_pins_a(int tx, int rx) { idf_tx_pin_a_ = tx; idf_rx_pin_a_ = rx; }
+  void set_idf_uart_pins_b(int tx, int rx) { idf_tx_pin_b_ = tx; idf_rx_pin_b_ = rx; }
 
   // Debug control
   void set_debug(bool en);
@@ -131,13 +133,15 @@ class GhostUARTComponent : public Component {
 
   // Service RX and close frames on idle (called from the dedicated RX task)
   void rx_task_tick();
+
   // Query RX task enabled state (used by the static RX task)
   bool rx_task_is_enabled() const { return rx_task_enabled_; }
+
   // Enable/disable the RX task (e.g., suspend during OTA)
   void set_rx_task_enabled(bool en);
 
  protected:
-  // UARTs
+  // UARTs (ESPHome path)
   uart::UARTComponent *uart_a_{nullptr}; // side A
   uart::UARTComponent *uart_b_{nullptr}; // side B
 
@@ -185,6 +189,8 @@ class GhostUARTComponent : public Component {
   uint32_t idf_rx_buf_b_{DEFAULT_RX_BUF};
   uint8_t  idf_rx_timeout_chars_a_{0};        // idle timeout in chars (0 = disabled)
   uint8_t  idf_rx_timeout_chars_b_{0};
+  int idf_tx_pin_a_{-1}, idf_rx_pin_a_{-1};
+  int idf_tx_pin_b_{-1}, idf_rx_pin_b_{-1};
 
   // IDF runtime handles
   QueueHandle_t idf_uart_queue_a_{nullptr};
@@ -200,7 +206,7 @@ class GhostUARTComponent : public Component {
   bool rx_task_enabled_{true};
 
   // Internals
-  void read_uart_(Direction dir);
+  void read_uart_(Direction dir);                  // legacy ESPHome UART path
   void on_silence_expired_(Direction dir);
   void forward_frame_(Direction dir, const std::vector<uint8_t> &frame);
   void parse_and_store_(const std::vector<uint8_t> &frame);
@@ -222,6 +228,12 @@ class GhostUARTComponent : public Component {
 
   bool bus_idle_() const;
   void recompute_timing_(); // derive effective timing from configured baud
+
+  // IDF helpers
+  bool idf_init_uart_(int uart_num, int tx_pin, int rx_pin,
+                      uint32_t rx_buf, uint8_t timeout_chars,
+                      QueueHandle_t &out_queue, const char *side_tag);
+  void idf_service_events_(int uart_num, QueueHandle_t queue, Direction dir);
 
   static uart::UARTComponent *rx_uart_(Direction dir, uart::UARTComponent *a, uart::UARTComponent *b) {
     return (dir == Direction::A_TO_B) ? a : b;
