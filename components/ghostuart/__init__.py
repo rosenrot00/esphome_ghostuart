@@ -17,6 +17,12 @@ CONF_MAX_RETRIES = "max_retries"
 CONF_DEBUG = "debug"
 CONF_BAUD = "baud"
 
+# New IDF-related options
+CONF_USE_IDF_DRIVER = "use_idf_driver"
+CONF_IDF_UART_NUMS = "idf_uart_nums"                # [num_a, num_b]
+CONF_IDF_RX_BUFS = "idf_rx_bufs"                    # [rx_buf_a, rx_buf_b]
+CONF_IDF_RX_TIMEOUT_CHARS = "idf_rx_timeout_chars"  # [chars_a, chars_b]
+
 CONFIG_SCHEMA = cv.Schema(
     {
         cv.GenerateID(CONF_ID): cv.declare_id(GhostUARTComponent),
@@ -30,6 +36,12 @@ CONFIG_SCHEMA = cv.Schema(
         cv.Optional(CONF_MAX_RETRIES, default=2): cv.int_range(min=0, max=10),
         cv.Optional(CONF_DEBUG, default=False): cv.boolean,
         cv.Optional(CONF_BAUD, default=9600): cv.int_range(min=300, max=1000000),
+
+        # IDF/native UART driver options (optional)
+        cv.Optional(CONF_USE_IDF_DRIVER, default=False): cv.boolean,
+        cv.Optional(CONF_IDF_UART_NUMS): cv.ensure_list(cv.int_range(min=0, max=2), min_items=2, max_items=2),
+        cv.Optional(CONF_IDF_RX_BUFS): cv.ensure_list(cv.uint32_t, min_items=2, max_items=2),
+        cv.Optional(CONF_IDF_RX_TIMEOUT_CHARS): cv.ensure_list(cv.int_range(min=0, max=255), min_items=2, max_items=2),
     }
 ).extend(cv.COMPONENT_SCHEMA)
 
@@ -55,4 +67,19 @@ async def to_code(config):
     # Debug initial state (can be toggled at runtime via set_debug)
     cg.add(var.set_debug(config[CONF_DEBUG]))
 
-    # Note: max_retries is currently managed internally; add setter if you want to expose it.
+    # IDF/native UART options
+    if CONF_USE_IDF_DRIVER in config:
+        cg.add(var.set_use_idf_driver(config[CONF_USE_IDF_DRIVER]))
+
+    if CONF_IDF_UART_NUMS in config:
+        nums = config[CONF_IDF_UART_NUMS]
+        # expect [num_a, num_b]
+        cg.add(var.set_idf_uart_nums(nums[0], nums[1]))
+
+    if CONF_IDF_RX_BUFS in config:
+        bufs = config[CONF_IDF_RX_BUFS]
+        cg.add(var.set_idf_rx_bufs(bufs[0], bufs[1]))
+
+    if CONF_IDF_RX_TIMEOUT_CHARS in config:
+        tchars = config[CONF_IDF_RX_TIMEOUT_CHARS]
+        cg.add(var.set_idf_rx_timeout_chars(tchars[0], tchars[1]))
