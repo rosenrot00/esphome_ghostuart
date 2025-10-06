@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// esphome_ghostuart - Generic UART MITM for ESPHome (A/B sides)
+
 #include "mitm_component.h"
 #include "esphome/core/log.h"
 #include "esphome/components/uart/uart.h"
@@ -36,6 +39,11 @@ uint8_t GhostUARTComponent::calc_lrc_(const uint8_t *data, size_t len) {
   return static_cast<uint8_t>((0x100 - sum8) & 0xFF);
 }
 
+static inline uint32_t ceil_div_u32(uint32_t a, uint32_t b) {
+  return (a + b - 1) / b;
+}
+
+// Auto / YAML timing computation
 void GhostUARTComponent::recompute_timing_() {
   const uint32_t bits_per_char = 11;  // assume 8E1; safe for 8N1
   if (baud_ == 0) return;
@@ -136,7 +144,20 @@ void GhostUARTComponent::rx_task_tick() {
 }
 
 void GhostUARTComponent::loop() {
-  // RX/framing is handled in the dedicated RX task; process injection here
+  // Drain and process frames completed by the RX task
+  for (int d = 0; d < 2; ++d) {
+    Direction dir = static_cast<Direction>(d);
+    auto &q = ready_frames_[d];
+    while (!q.empty()) {
+      std::vector<uint8_t> frame = std::move(q.front());
+      q.erase(q.begin());
+      // Parse and forward now in loop context
+      parse_and_store_(frame);
+      forward_frame_(dir, frame);
+    }
+  }
+
+  // Then handle injection
   process_inject_queue_();
 }
 
@@ -194,11 +215,13 @@ void GhostUARTComponent::on_silence_expired_(Direction dir) {
   s.interbyte_us.clear();
   s.frame_ready = false;
   frames_parsed_++;
+  // Hand off the finished frame to loop() for parsing/forwarding
+  enqueue_ready_frame_(dir, std::move(frame));
+}
 
-  // Parse and store: exceptions are disabled in ESPHome builds; call directly.
-  parse_and_store_(frame);
-
-  forward_frame_(dir, frame);
+// ------------------------ Ready frame queue (RX task -> loop) ---------------
+void GhostUARTComponent::enqueue_ready_frame_(Direction dir, std::vector<uint8_t> &&frame) {
+  ready_frames_[static_cast<int>(dir)].push_back(std::move(frame));
 }
 
 // ---------------------------- Forwarding -----------------------------------
