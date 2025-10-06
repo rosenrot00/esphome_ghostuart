@@ -242,7 +242,14 @@ void GhostUARTComponent::on_silence_expired_(Direction dir) {
   s.interbyte_us.clear();
   s.frame_ready = false;
   frames_parsed_++;
-    enqueue_ready_frame_(dir, std::move(frame));
+
+  if (debug_enabled_) {
+    ESP_LOGD(TAG, "[%c] Frame closed len=%u",
+             (dir == Direction::A_TO_B ? 'A' : 'B'), (unsigned)frame.size());
+  }
+
+  // Enqueue for loop() to process (parse + forward)
+  enqueue_ready_frame_(dir, std::move(frame));
 }
 
 // ------------------------ Ready frame queue (RX task -> loop) ---------------
@@ -264,32 +271,22 @@ void GhostUARTComponent::forward_frame_(Direction dir, const std::vector<uint8_t
       if (idx >= (int)sizeof(hex)) break;
     }
     hex[sizeof(hex) - 1] = '\0';
-    // dir A_TO_B bedeutet TX auf Seite B, daher Kennzeichnung 'B'; umgekehrt 'A'
     ESP_LOGD(TAG, "TX(%c) %u bytes data=[%s]%s",
-             (dir == Direction::A_TO_B ? 'B' : 'A'),
-             (unsigned)frame.size(), hex,
+             (dir == Direction::A_TO_B ? 'B' : 'A'), (unsigned)frame.size(), hex,
              (frame.size() > (size_t)max_dump ? " ..." : ""));
   }
 
   // IDF TX path if native driver is active
   if (use_idf_driver_) {
-  int port = (dir == Direction::A_TO_B) ? idf_uart_num_b_ : idf_uart_num_a_;
-  bool installed = (dir == Direction::A_TO_B) ? idf_driver_installed_b_ : idf_driver_installed_a_;
-  if (port < 0 || !installed) {
-    ESP_LOGW(TAG, "TX IDF port not ready (port=%d, installed=%d)", port, (int)installed);
-    return;
-  }
-  int written = uart_write_bytes((uart_port_t)port, frame.data(), frame.size());
-  if (written < 0) {
-    ESP_LOGW(TAG, "uart_write_bytes failed on UART%d (len=%u)", port, (unsigned)frame.size());
-    return;
-  }
-  frames_forwarded_[static_cast<int>(dir)]++;
-  return;
-}
+    int port = (dir == Direction::A_TO_B) ? idf_uart_num_b_ : idf_uart_num_a_;
+    bool installed = (dir == Direction::A_TO_B) ? idf_driver_installed_b_ : idf_driver_installed_a_;
+    if (port < 0 || !installed) {
+      ESP_LOGW(TAG, "TX IDF port not ready (port=%d, installed=%d)", port, (int)installed);
+      return;
+    }
     int written = uart_write_bytes((uart_port_t)port, frame.data(), frame.size());
     if (written < 0) {
-      ESP_LOGW(TAG, "uart_write_bytes failed on UART%d", port);
+      ESP_LOGW(TAG, "uart_write_bytes failed on UART%d (len=%u)", port, (unsigned)frame.size());
       return;
     }
     frames_forwarded_[static_cast<int>(dir)]++;
