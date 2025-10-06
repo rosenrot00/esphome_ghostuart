@@ -242,9 +242,11 @@ void GhostUARTComponent::on_silence_expired_(Direction dir) {
   s.interbyte_us.clear();
   s.frame_ready = false;
   frames_parsed_++;
-
-  // Enqueue for loop() to process (parse + forward)
-  enqueue_ready_frame_(dir, std::move(frame));
+    if (debug_enabled_) {
+    ESP_LOGD(TAG, "[%c] Frame closed len=%u",
+            (dir == Direction::A_TO_B ? 'A' : 'B'), (unsigned)frame.size());
+    }
+    enqueue_ready_frame_(dir, std::move(frame));
 }
 
 // ------------------------ Ready frame queue (RX task -> loop) ---------------
@@ -254,18 +256,10 @@ void GhostUARTComponent::enqueue_ready_frame_(Direction dir, std::vector<uint8_t
 
 // ---------------------------- Forwarding -----------------------------------
 void GhostUARTComponent::forward_frame_(Direction dir, const std::vector<uint8_t> &frame) {
-  uart::UARTComponent *txu = tx_uart_(dir, uart_a_, uart_b_);
-  if (!txu) {
-    ESP_LOGW(TAG, "TX UART not configured (A/B)");
-    return;
-  }
   if (frame.empty()) return;
 
-  txu->write_array(frame.data(), frame.size());
-  frames_forwarded_[static_cast<int>(dir)]++;
-
+  // Debug before sending (always dump up to 32 bytes)
   if (debug_enabled_) {
-    // hex-dump up to first 32 bytes
     char hex[3 * 32 + 1];
     int max_dump = frame.size() < 32 ? frame.size() : 32;
     int idx = 0;
@@ -274,13 +268,38 @@ void GhostUARTComponent::forward_frame_(Direction dir, const std::vector<uint8_t
       if (idx >= (int)sizeof(hex)) break;
     }
     hex[sizeof(hex) - 1] = '\0';
-
-    if ((int)frame.size() <= max_dump) {
-      ESP_LOGD(TAG, "Forwarded %u bytes (direction=%d) data=[%s]", (unsigned)frame.size(), static_cast<int>(dir), hex);
-    } else {
-      ESP_LOGD(TAG, "Forwarded %u bytes (direction=%d) data=[%s] ...", (unsigned)frame.size(), static_cast<int>(dir), hex);
-    }
+    // dir A_TO_B bedeutet TX auf Seite B, daher Kennzeichnung 'B'; umgekehrt 'A'
+    ESP_LOGD(TAG, "TX(%c) %u bytes data=[%s]%s",
+             (dir == Direction::A_TO_B ? 'B' : 'A'),
+             (unsigned)frame.size(), hex,
+             (frame.size() > (size_t)max_dump ? " ..." : ""));
   }
+
+  // IDF TX path if native driver is active
+  if (use_idf_driver_) {
+    // A->B => TX auf UART B; B->A => TX auf UART A
+    int port = (dir == Direction::A_TO_B) ? idf_uart_num_b_ : idf_uart_num_a_;
+    if (port < 0) {
+      ESP_LOGW(TAG, "TX IDF port not set (A/B)");
+      return;
+    }
+    int written = uart_write_bytes((uart_port_t)port, frame.data(), frame.size());
+    if (written < 0) {
+      ESP_LOGW(TAG, "uart_write_bytes failed on UART%d", port);
+      return;
+    }
+    frames_forwarded_[static_cast<int>(dir)]++;
+    return;
+  }
+
+  // Legacy ESPHome path
+  uart::UARTComponent *txu = tx_uart_(dir, uart_a_, uart_b_);
+  if (!txu) {
+    ESP_LOGW(TAG, "TX UART not configured (A/B)");
+    return;
+  }
+  txu->write_array(frame.data(), frame.size());
+  frames_forwarded_[static_cast<int](dir)]++;
 }
 
 // ----------------------------- Parsing -------------------------------------
@@ -608,6 +627,10 @@ void GhostUARTComponent::idf_service_events_(int uart_num, QueueHandle_t queue, 
           std::vector<uint8_t> tmp(rxlen);
           int r = uart_read_bytes(static_cast<uart_port_t>(uart_num), tmp.data(), rxlen, 0);
           if (r > 0) {
+            if (debug_enabled_) {
+                ESP_LOGD(TAG, "[%c] RX %d bytes (UART%d)",
+                        (dir == Direction::A_TO_B ? 'A' : 'B'), r, uart_num);
+            }
             auto &s = rx_[static_cast<int>(dir)];
             uint32_t now_ms = millis();
             for (int i = 0; i < r; ++i) {
