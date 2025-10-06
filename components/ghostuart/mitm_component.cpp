@@ -420,13 +420,11 @@ bool GhostUARTComponent::build_frame_from_template_(const FrameTemplate &tp,
 }
 
 // ------------------------ Inject queue processing --------------------------
-bool GhostUARTComponent::bus_idle_() const {
+bool GhostUARTComponent::bus_idle_(Direction dir) const {
   uint32_t now = millis();
-  for (int d = 0; d < 2; ++d) {
-    const auto &s = rx_[d];
-    if (!s.buffer.empty()) return false;
-    if ((now - s.last_rx_ms) < silence_ms_eff_) return false;
-  }
+  const auto &s = rx_[static_cast<int>(dir)];
+  if (!s.buffer.empty()) return false;
+  if ((now - s.last_rx_ms) < silence_ms_eff_) return false;
   return true;
 }
 
@@ -444,12 +442,24 @@ void GhostUARTComponent::process_inject_queue_() {
     return;
   }
 
-  // Wait until bus idle
-  if (!bus_idle_()) return;
+  // Determine target side: default B, allow override via {"_target":"A"|"B"}
+  Direction target_dir = Direction::A_TO_B; // A->B means we will TX on side B
+  auto it_tgt = job.overrides.find("_target");
+  if (it_tgt != job.overrides.end()) {
+    const std::string &t = it_tgt->second;
+    if (!t.empty() && (t[0] == 'A' || t[0] == 'a')) {
+      target_dir = Direction::B_TO_A; // TX on side A
+    } else if (!t.empty() && (t[0] == 'B' || t[0] == 'b')) {
+      target_dir = Direction::A_TO_B; // TX on side B
+    }
+  }
+
+  // Wait until bus is idle on the target side
+  if (!bus_idle_(target_dir)) return;
 
   // Pre-listen time
   delay(pre_listen_ms_eff_);
-  if (!bus_idle_()) return;
+  if (!bus_idle_(target_dir)) return;
 
   std::vector<uint8_t> frame;
   if (!build_frame_from_template_(*it_tpl, job.overrides, frame)) {
@@ -458,20 +468,12 @@ void GhostUARTComponent::process_inject_queue_() {
     return;
   }
 
-  // Send on side B (typical remote emulation) via IDF driver
-  int port = idf_uart_num_b_;
-  if (port < 0 || !idf_driver_installed_b_) {
-    ESP_LOGW(TAG, "IDF TX not ready for B (port=%d, installed=%d)", port, (int)idf_driver_installed_b_);
-    inject_queue_.erase(inject_queue_.begin());
-    return;
-  }
-  int written = uart_write_bytes((uart_port_t)port, frame.data(), frame.size());
-  if (written < 0) {
-    ESP_LOGW(TAG, "uart_write_bytes failed for inject on UART%d (len=%u)", port, (unsigned)frame.size());
-    inject_queue_.erase(inject_queue_.begin());
-    return;
-  }
-  ESP_LOGI(TAG, "Injected frame (%u bytes) via template '%s'", (unsigned)frame.size(), job.template_name.c_str());
+  // Reuse normal TX path (handles IDF/legacy and logging):
+  forward_frame_(target_dir, frame);
+
+  ESP_LOGI(TAG, "Injected frame (%u bytes) via template '%s' to %c",
+           (unsigned)frame.size(), job.template_name.c_str(),
+           (target_dir == Direction::A_TO_B ? 'B' : 'A'));
 
   inject_queue_.erase(inject_queue_.begin());
 }
