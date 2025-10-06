@@ -230,7 +230,7 @@ class GhostUARTComponent : public Component {
                                   std::vector<uint8_t> &out_frame);
   void process_inject_queue_();
 
-  bool bus_idle_() const;
+  bool bus_idle_(Direction dir) const;
   void recompute_timing_(); // derive effective timing from configured baud
 
   // IDF helpers
