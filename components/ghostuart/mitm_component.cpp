@@ -5,6 +5,7 @@
 #include "esphome/core/log.h"
 #include "esphome/components/uart/uart.h"
 #include "esphome/core/helpers.h"
+
 #include <algorithm>
 #include <cstring>
 #include <cmath>
@@ -14,14 +15,15 @@ namespace ghostuart {
 
 static const char *TAG = "ghostuart";
 
-// RX task: continuously services both UART sides so framing is independent of loop() latency
+// ------------------------------- RX task -----------------------------------
+// Dedicated RX task — calls rx_task_tick() on the component instance.
+// It sleeps a little between ticks to be cooperative with other tasks.
 static void ghostuart_rx_task(void *param) {
-  auto *self = reinterpret_cast<GhostUARTComponent*>(param);
-  // Small cooperative delay to avoid watchdog issues
+  auto *self = reinterpret_cast<GhostUARTComponent *>(param);
   const TickType_t tick_1ms = pdMS_TO_TICKS(1);
   for (;;) {
-    // if RX task is disabled, sleep longer and continue
     if (!self->rx_task_is_enabled()) {
+      // If disabled (for OTA or similar), sleep longer to reduce load.
       vTaskDelay(pdMS_TO_TICKS(50));
       continue;
     }
@@ -34,7 +36,8 @@ static void ghostuart_rx_task(void *param) {
 // Calculate 8-bit LRC (two's complement of byte sum)
 uint8_t GhostUARTComponent::calc_lrc_(const uint8_t *data, size_t len) {
   uint32_t s = 0;
-  for (size_t i = 0; i < len; ++i) s += data[i];
+  for (size_t i = 0; i < len; ++i)
+    s += data[i];
   uint8_t sum8 = static_cast<uint8_t>(s & 0xFF);
   return static_cast<uint8_t>((0x100 - sum8) & 0xFF);
 }
@@ -45,11 +48,11 @@ static inline uint32_t ceil_div_u32(uint32_t a, uint32_t b) {
 
 // Auto / YAML timing computation
 void GhostUARTComponent::recompute_timing_() {
-  const uint32_t bits_per_char = 11;  // assume 8E1; safe for 8N1
+  const uint32_t bits_per_char = 11;  // conservative: 8 data + parity + start/stop
   if (baud_ == 0) return;
   const float char_ms = (1000.0f * bits_per_char) / static_cast<float>(baud_);
 
-  // Silence: use YAML if provided, otherwise 10 character times
+  // Silence: YAML if provided, otherwise N character times (10 here by default)
   if (silence_ms_cfg_ > 0) {
     silence_ms_eff_ = silence_ms_cfg_;
   } else {
@@ -59,7 +62,7 @@ void GhostUARTComponent::recompute_timing_() {
     silence_ms_eff_ = auto_ms;
   }
 
-  // Pre-listen: use YAML if provided, otherwise 0.75 character times (min 1 ms)
+  // Pre-listen: YAML if provided, otherwise ~0.75 char times
   if (pre_listen_ms_cfg_ > 0) {
     pre_listen_ms_eff_ = pre_listen_ms_cfg_;
   } else {
@@ -108,37 +111,61 @@ void GhostUARTComponent::set_debug(bool en) {
 
 // ------------------------------ Setup / Loop -------------------------------
 void GhostUARTComponent::setup() {
-  // Initialize effective timings from config if explicitly set.
+  // Apply explicit YAML values if provided; recompute otherwise.
   if (silence_ms_cfg_ != 0) silence_ms_eff_ = silence_ms_cfg_;
   if (pre_listen_ms_cfg_ != 0) pre_listen_ms_eff_ = pre_listen_ms_cfg_;
 
   ESP_LOGI(TAG, "GhostUART setup – max_frame=%u, silence=%u ms, pre_listen=%u ms, debug=%s",
            max_frame_, silence_ms_eff_, pre_listen_ms_eff_, debug_enabled_ ? "true" : "false");
 
-  // Initialize auto timings from baud if requested (silence/pre_listen == 0)
+  // Compute auto timing if needed
   recompute_timing_();
 
-  // Spawn a dedicated RX task so we service UART buffers independent of loop() load
+  // If IDF/native UART mode requested, initialize UART drivers with event queues
+  if (use_idf_driver_) {
+    bool ok_a = idf_init_uart_(idf_uart_num_a_, idf_tx_pin_a_, idf_rx_pin_a_,
+                               idf_rx_buf_a_, idf_rx_timeout_chars_a_, idf_uart_queue_a_, "A");
+    bool ok_b = idf_init_uart_(idf_uart_num_b_, idf_tx_pin_b_, idf_rx_pin_b_,
+                               idf_rx_buf_b_, idf_rx_timeout_chars_b_, idf_uart_queue_b_, "B");
+    idf_driver_installed_a_ = ok_a;
+    idf_driver_installed_b_ = ok_b;
+  }
+
+  // Spawn RX task to service UARTs independently of the main loop
   xTaskCreatePinnedToCore(ghostuart_rx_task, "ghostuart_rx", 4096, this, 4, &rx_task_handle_, tskNO_AFFINITY);
 }
 
 void GhostUARTComponent::rx_task_tick() {
-  // Service both sides
+  // IDF mode: service hardware event queues
+  if (use_idf_driver_) {
+    if (idf_driver_installed_a_ && idf_uart_queue_a_) idf_service_events_(idf_uart_num_a_, idf_uart_queue_a_, Direction::A_TO_B);
+    if (idf_driver_installed_b_ && idf_uart_queue_b_) idf_service_events_(idf_uart_num_b_, idf_uart_queue_b_, Direction::B_TO_A);
+
+    // Safety net: if events missed, fallback to silence_ms-based close
+    uint32_t now_ms = millis();
+    for (int d = 0; d < 2; ++d) {
+      Direction dir = static_cast<Direction>(d);
+      auto &s = rx_[d];
+      if (!s.buffer.empty() && (now_ms - s.last_rx_ms) >= silence_ms_eff_ && !s.frame_ready) {
+        s.frame_ready = true;
+        on_silence_expired_(dir);
+      }
+    }
+    return;
+  }
+
+  // Legacy path (ESPHome UARTComponent)
   read_uart_(Direction::A_TO_B);
   read_uart_(Direction::B_TO_A);
 
-  // Close frames on idle (do framing in RX task to decouple from loop timing)
+  // Close frames on silence
   uint32_t now_ms = millis();
   for (int d = 0; d < 2; ++d) {
     Direction dir = static_cast<Direction>(d);
     auto &s = rx_[d];
-    if (!s.buffer.empty()) {
-      if ((now_ms - s.last_rx_ms) >= silence_ms_eff_) {
-        if (!s.frame_ready) {
-          s.frame_ready = true;
-          on_silence_expired_(dir);
-        }
-      }
+    if (!s.buffer.empty() && (now_ms - s.last_rx_ms) >= silence_ms_eff_ && !s.frame_ready) {
+      s.frame_ready = true;
+      on_silence_expired_(dir);
     }
   }
 }
@@ -157,12 +184,12 @@ void GhostUARTComponent::loop() {
     }
   }
 
-  // Then handle injection
+  // Then handle injection queue (sends after frames processed)
   process_inject_queue_();
 }
 
-// ------------------------------ UART read ----------------------------------
-// Read available bytes from one side, update adaptive timing, and collect into a frame buffer.
+// ------------------------------ UART read (legacy) --------------------------
+// Read available bytes from one side (using ESPHome UARTComponent)
 void GhostUARTComponent::read_uart_(Direction dir) {
   uart::UARTComponent *rxu = rx_uart_(dir, uart_a_, uart_b_);
   if (!rxu) return;
@@ -171,8 +198,8 @@ void GhostUARTComponent::read_uart_(Direction dir) {
   while (true) {
     int avail = rxu->available();
     if (avail <= 0) {
-      // Yielding coalesce: wait a few ms for trailing bytes without busy-spinning
-      vTaskDelay(pdMS_TO_TICKS(5));
+      // small delay to coalesce trailing bytes without busy spinning
+      vTaskDelay(pdMS_TO_TICKS(2));
       avail = rxu->available();
       if (avail <= 0) break;
     }
@@ -191,31 +218,32 @@ void GhostUARTComponent::read_uart_(Direction dir) {
         s.buffer.push_back(buf[i]);
         s.interbyte_us.push_back(1);
       } else {
+        // protect buffer overflow: drop oldest
         s.buffer.erase(s.buffer.begin());
         s.buffer.push_back(buf[i]);
       }
-
       s.last_rx_ms = now_ms;
       s.frame_ready = false;
     }
 
-    // Yield to let the UART driver and other tasks run
+    // yield to keep system responsive
     delay(0);
   }
 }
 
 // ---------------------------- Silence expired ------------------------------
-// Called when a frame is complete (no bytes received for silence_ms_eff_)
+// Called by RX task when a frame is closed (no new bytes for silence_ms_eff_)
 void GhostUARTComponent::on_silence_expired_(Direction dir) {
   auto &s = rx_[static_cast<int>(dir)];
   if (s.buffer.empty()) return;
 
-  std::vector<uint8_t> frame = s.buffer;
+  std::vector<uint8_t> frame = std::move(s.buffer);
   s.buffer.clear();
   s.interbyte_us.clear();
   s.frame_ready = false;
   frames_parsed_++;
-  // Hand off the finished frame to loop() for parsing/forwarding
+
+  // Enqueue for loop() to process (parse + forward)
   enqueue_ready_frame_(dir, std::move(frame));
 }
 
@@ -225,7 +253,6 @@ void GhostUARTComponent::enqueue_ready_frame_(Direction dir, std::vector<uint8_t
 }
 
 // ---------------------------- Forwarding -----------------------------------
-// Forward a complete frame from side A→B or B→A
 void GhostUARTComponent::forward_frame_(Direction dir, const std::vector<uint8_t> &frame) {
   uart::UARTComponent *txu = tx_uart_(dir, uart_a_, uart_b_);
   if (!txu) {
@@ -236,10 +263,11 @@ void GhostUARTComponent::forward_frame_(Direction dir, const std::vector<uint8_t
 
   txu->write_array(frame.data(), frame.size());
   frames_forwarded_[static_cast<int>(dir)]++;
+
   if (debug_enabled_) {
-    // Build a short hex dump of up to the first 16 bytes
-    char hex[3 * 16 + 1];
-    int max_dump = frame.size() < 16 ? frame.size() : 16;
+    // hex-dump up to first 32 bytes
+    char hex[3 * 32 + 1];
+    int max_dump = frame.size() < 32 ? frame.size() : 32;
     int idx = 0;
     for (int i = 0; i < max_dump; ++i) {
       idx += snprintf(&hex[idx], sizeof(hex) - idx, "%02X%s", frame[i], (i + 1 < max_dump ? " " : ""));
@@ -256,7 +284,6 @@ void GhostUARTComponent::forward_frame_(Direction dir, const std::vector<uint8_t
 }
 
 // ----------------------------- Parsing -------------------------------------
-// Parse received frame using mappings and update stored variables
 void GhostUARTComponent::parse_and_store_(const std::vector<uint8_t> &frame) {
   for (const auto &m : mappings_) {
     if (!selector_match_(m.selector, frame)) continue;
@@ -315,31 +342,35 @@ bool GhostUARTComponent::decode_field_(const FieldDescriptor &fd,
       return true;
     }
     case FieldFormat::UINT16_LE: {
+      if (out_raw.size() < 2) return false;
       uint16_t v = static_cast<uint16_t>(out_raw[0]) | (static_cast<uint16_t>(out_raw[1]) << 8);
       out_value_scaled = static_cast<float>(v) * fd.scale;
       out_value_str = std::to_string(v);
       return true;
     }
     case FieldFormat::UINT16_BE: {
+      if (out_raw.size() < 2) return false;
       uint16_t v = (static_cast<uint16_t>(out_raw[0]) << 8) | static_cast<uint16_t>(out_raw[1]);
       out_value_scaled = static_cast<float>(v) * fd.scale;
       out_value_str = std::to_string(v);
       return true;
     }
     case FieldFormat::INT16_LE: {
-      int16_t v = static_cast<int16_t>(out_raw[0] | (out_raw[1] << 8));
+      if (out_raw.size() < 2) return false;
+      int16_t v = static_cast<int16_t>(static_cast<uint16_t>(out_raw[0]) | (static_cast<uint16_t>(out_raw[1]) << 8));
       out_value_scaled = static_cast<float>(v) * fd.scale;
       out_value_str = std::to_string(v);
       return true;
     }
     case FieldFormat::INT16_BE: {
-      int16_t v = static_cast<int16_t>((out_raw[0] << 8) | out_raw[1]);
+      if (out_raw.size() < 2) return false;
+      int16_t v = static_cast<int16_t>((static_cast<uint16_t>(out_raw[0]) << 8) | static_cast<uint16_t>(out_raw[1]));
       out_value_scaled = static_cast<float>(v) * fd.scale;
       out_value_str = std::to_string(v);
       return true;
     }
     case FieldFormat::ASCII: {
-      out_value_str.assign(reinterpret_cast<const char*>(out_raw.data()), out_raw.size());
+      out_value_str.assign(reinterpret_cast<const char *>(out_raw.data()), out_raw.size());
       out_value_scaled = NAN;
       return true;
     }
@@ -434,7 +465,6 @@ bool GhostUARTComponent::build_frame_from_template_(const FrameTemplate &tp,
 }
 
 // ------------------------ Inject queue processing --------------------------
-// Wait for both sides to be idle, then send next frame from the injection queue
 bool GhostUARTComponent::bus_idle_() const {
   uint32_t now = millis();
   for (int d = 0; d < 2; ++d) {
@@ -459,10 +489,10 @@ void GhostUARTComponent::process_inject_queue_() {
     return;
   }
 
-  // Wait until both directions are idle
+  // Wait until bus idle
   if (!bus_idle_()) return;
 
-  // Short pre-listen
+  // Pre-listen time
   delay(pre_listen_ms_eff_);
   if (!bus_idle_()) return;
 
@@ -473,7 +503,7 @@ void GhostUARTComponent::process_inject_queue_() {
     return;
   }
 
-  // Send on side B by default (typical "remote emulation" towards bus)
+  // Send on side B (typical remote emulation)
   uart::UARTComponent *txb = uart_b_;
   if (!txb) {
     ESP_LOGW(TAG, "No side B UART configured for inject");
@@ -487,6 +517,7 @@ void GhostUARTComponent::process_inject_queue_() {
   inject_queue_.erase(inject_queue_.begin());
 }
 
+// ------------------------ RX task control ---------------------------------
 void GhostUARTComponent::set_rx_task_enabled(bool en) {
   rx_task_enabled_ = en;
   if (rx_task_handle_ == nullptr) return;
@@ -498,6 +529,114 @@ void GhostUARTComponent::set_rx_task_enabled(bool en) {
     ESP_LOGI(TAG, "RX task resumed");
   }
 }
+
+// ------------------------ IDF UART helpers ---------------------------------
+// Initialize a native IDF UART with driver and event queue. Pins optional.
+bool GhostUARTComponent::idf_init_uart_(int uart_num, int tx_pin, int rx_pin,
+                                        uint32_t rx_buf, uint8_t timeout_chars,
+                                        QueueHandle_t &out_queue, const char *side_tag) {
+  if (uart_num < 0) {
+    ESP_LOGW(TAG, "%s: IDF uart_num not set; skipping", side_tag);
+    return false;
+  }
+
+  uart_config_t cfg{};
+  cfg.baud_rate = static_cast<int>(baud_);
+  cfg.data_bits = UART_DATA_8_BITS;
+  cfg.parity = UART_PARITY_EVEN;   // defaulting to EVEN; change if necessary
+  cfg.stop_bits = UART_STOP_BITS_1;
+  cfg.flow_ctrl = UART_HW_FLOWCTRL_DISABLE;
+  cfg.source_clk = UART_SCLK_APB;
+
+  esp_err_t err = uart_param_config(static_cast<uart_port_t>(uart_num), &cfg);
+  if (err != ESP_OK) {
+    ESP_LOGE(TAG, "%s: uart_param_config err=%d", side_tag, (int)err);
+    return false;
+  }
+
+  // If pins provided, apply them. Otherwise assume pinmux already set externally.
+  if (tx_pin >= 0 && rx_pin >= 0) {
+    err = uart_set_pin(static_cast<uart_port_t>(uart_num), tx_pin, rx_pin, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
+    if (err != ESP_OK) {
+      ESP_LOGE(TAG, "%s: uart_set_pin err=%d", side_tag, (int)err);
+      return false;
+    }
+  } else {
+    ESP_LOGW(TAG, "%s: uart pins not set via IDF; leaving existing pinmux", side_tag);
+  }
+
+  // Install driver with RX buffer and an event queue (small queue depth)
+  // tx buffer set to 0 (we use uart_write_bytes via driver when needed)
+  err = uart_driver_install(static_cast<uart_port_t>(uart_num), static_cast<int>(rx_buf), 0, 20, &out_queue, 0);
+  if (err != ESP_OK) {
+    ESP_LOGE(TAG, "%s: uart_driver_install err=%d", side_tag, (int)err);
+    return false;
+  }
+
+  // Configure RX timeout in chars (idle detection)
+  if (timeout_chars > 0) {
+    err = uart_set_rx_timeout(static_cast<uart_port_t>(uart_num), timeout_chars);
+    if (err != ESP_OK) {
+      ESP_LOGE(TAG, "%s: uart_set_rx_timeout err=%d", side_tag, (int)err);
+      // not fatal — continue
+    }
+  }
+
+  ESP_LOGI(TAG, "%s: IDF UART%d init ok (baud=%u, timeout_chars=%u, rx_buf=%u)", side_tag, uart_num, baud_, timeout_chars, (unsigned)rx_buf);
+  return true;
+}
+
+// Service events from an IDF UART event queue.
+// Reads UART_DATA into rx_ buffer and closes frame on RXFIFO_TOUT / BREAK events.
+void GhostUARTComponent::idf_service_events_(int uart_num, QueueHandle_t queue, Direction dir) {
+  if (!queue) return;
+
+  uart_event_t evt;
+  // Drain quickly; do not block here (outer RX task is periodic)
+  while (xQueueReceive(queue, &evt, 0) == pdTRUE) {
+    switch (evt.type) {
+      case UART_DATA: {
+        size_t rxlen = 0;
+        uart_get_buffered_data_len(static_cast<uart_port_t>(uart_num), &rxlen);
+        if (rxlen == 0) rxlen = evt.size;
+        if (rxlen > 0) {
+          std::vector<uint8_t> tmp(rxlen);
+          int r = uart_read_bytes(static_cast<uart_port_t>(uart_num), tmp.data(), rxlen, 0);
+          if (r > 0) {
+            auto &s = rx_[static_cast<int>(dir)];
+            uint32_t now_ms = millis();
+            for (int i = 0; i < r; ++i) {
+              if (s.buffer.size() < max_frame_) s.buffer.push_back(tmp[i]);
+              else { s.buffer.erase(s.buffer.begin()); s.buffer.push_back(tmp[i]); }
+              s.last_rx_ms = now_ms;
+              s.frame_ready = false;
+            }
+          }
+        }
+        break;
+      }
+      case UART_RXFIFO_TOUT:
+      case UART_BREAK: {
+        // Hardware idle or break — close current frame immediately
+        auto &s = rx_[static_cast<int>(dir)];
+        if (!s.buffer.empty() && !s.frame_ready) {
+          s.frame_ready = true;
+          on_silence_expired_(dir);
+        }
+        break;
+      }
+      case UART_FIFO_OVF:
+      case UART_BUFFER_FULL: {
+        ESP_LOGW(TAG, "UART%d overflow / buffer full (dir=%d)", uart_num, static_cast<int>(dir));
+        uart_flush(static_cast<uart_port_t>(uart_num));
+        break;
+      }
+      default:
+        break;
+    }
+  }
+}
+
 // --------------------------------- EOF ------------------------------------
 }  // namespace ghostuart
 }  // namespace esphome
