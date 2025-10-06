@@ -44,11 +44,28 @@ CONFIG_SCHEMA = cv.Schema(
 
         # IDF driver mode
         cv.Optional(CONF_USE_IDF_DRIVER, default=False): cv.boolean,
-        cv.Optional(CONF_IDF_UART_NUMS): cv.ensure_list(cv.int_range(min=0, max=2), min_items=2, max_items=2),
-        cv.Optional(CONF_IDF_RX_BUFS): cv.ensure_list(cv.uint32_t, min_items=2, max_items=2),
-        cv.Optional(CONF_IDF_RX_TIMEOUT_CHARS): cv.ensure_list(cv.int_range(min=0, max=255), min_items=2, max_items=2),
-        cv.Optional(CONF_IDF_UART_PINS_A): cv.ensure_list(cv.int_, min_items=2, max_items=2),
-        cv.Optional(CONF_IDF_UART_PINS_B): cv.ensure_list(cv.int_, min_items=2, max_items=2),
+
+        # Expect exactly two integers in each list; validate length via cv.Length
+        cv.Optional(CONF_IDF_UART_NUMS): cv.All(
+            cv.ensure_list(cv.int_range(min=0, max=2)),
+            cv.Length(min=2, max=2)
+        ),
+        cv.Optional(CONF_IDF_RX_BUFS): cv.All(
+            cv.ensure_list(cv.uint32_t),
+            cv.Length(min=2, max=2)
+        ),
+        cv.Optional(CONF_IDF_RX_TIMEOUT_CHARS): cv.All(
+            cv.ensure_list(cv.int_range(min=0, max=255)),
+            cv.Length(min=2, max=2)
+        ),
+        cv.Optional(CONF_IDF_UART_PINS_A): cv.All(
+            cv.ensure_list(cv.int_),
+            cv.Length(min=2, max=2)
+        ),
+        cv.Optional(CONF_IDF_UART_PINS_B): cv.All(
+            cv.ensure_list(cv.int_),
+            cv.Length(min=2, max=2)
+        ),
     }
 ).extend(cv.COMPONENT_SCHEMA)
 
@@ -78,6 +95,7 @@ async def to_code(config):
 
     if CONF_IDF_UART_NUMS in config:
         nums = config[CONF_IDF_UART_NUMS]
+        # list length already validated via cv.Length
         cg.add(var.set_idf_uart_nums(nums[0], nums[1]))
 
     if CONF_IDF_RX_BUFS in config:
