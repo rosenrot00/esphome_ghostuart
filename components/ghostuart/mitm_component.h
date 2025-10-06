@@ -11,6 +11,8 @@
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "driver/uart.h"
+#include "freertos/queue.h"
 
 namespace esphome {
 namespace ghostuart {
@@ -97,6 +99,11 @@ class GhostUARTComponent : public Component {
   void set_pre_listen_ms(uint32_t ms) { pre_listen_ms_cfg_ = ms; recompute_timing_(); }
   void set_max_frame(uint16_t n) { max_frame_ = n; }
 
+  // IDF driver mode (optional): switch to native ESP-IDF UART driver + event-queue
+  void set_use_idf_driver(bool en) { use_idf_driver_ = en; }
+  void set_idf_uart_nums(int a, int b) { idf_uart_num_a_ = a; idf_uart_num_b_ = b; }
+  void set_idf_rx_bufs(uint32_t a, uint32_t b) { idf_rx_buf_a_ = a; idf_rx_buf_b_ = b; }
+  void set_idf_rx_timeout_chars(uint8_t a, uint8_t b) { idf_rx_timeout_chars_a_ = a; idf_rx_timeout_chars_b_ = b; }
 
   // Debug control
   void set_debug(bool en);
@@ -169,6 +176,21 @@ class GhostUARTComponent : public Component {
 
   // Enqueue a finished frame from RX task
   void enqueue_ready_frame_(Direction dir, std::vector<uint8_t> &&frame);
+
+  // IDF/native-UART driver configuration & state (optional)
+  bool use_idf_driver_{false};                // when true, initialize native IDF uart drivers and use event queues
+  int  idf_uart_num_a_{-1};                   // UART port numbers (UART_NUM_0/1/2) for side A
+  int  idf_uart_num_b_{-1};                   // UART port numbers for side B
+  uint32_t idf_rx_buf_a_{DEFAULT_RX_BUF};     // RX buffer size used with uart_driver_install
+  uint32_t idf_rx_buf_b_{DEFAULT_RX_BUF};
+  uint8_t  idf_rx_timeout_chars_a_{0};        // idle timeout in chars (0 = disabled)
+  uint8_t  idf_rx_timeout_chars_b_{0};
+
+  // IDF runtime handles
+  QueueHandle_t idf_uart_queue_a_{nullptr};
+  QueueHandle_t idf_uart_queue_b_{nullptr};
+  bool idf_driver_installed_a_{false};
+  bool idf_driver_installed_b_{false};
 
   // Debug flag
   bool debug_enabled_{false};
