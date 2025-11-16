@@ -125,6 +125,9 @@ class GhostUARTComponent : public Component {
   void set_idf_uart_pins_a(int tx, int rx) { idf_tx_pin_a_ = tx; idf_rx_pin_a_ = rx; }
   void set_idf_uart_pins_b(int tx, int rx) { idf_tx_pin_b_ = tx; idf_rx_pin_b_ = rx; }
 
+  // Add a frame filter rule from numeric codes (used by YAML/codegen)
+  void add_filter_rule(uint8_t dir_code, const std::vector<uint8_t> &prefix, uint8_t action_code);
+
   // Debug control
   void set_debug(bool en);
 
