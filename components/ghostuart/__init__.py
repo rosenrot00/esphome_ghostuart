@@ -22,6 +22,23 @@ CONF_BAUD = "baud"
 CONF_PARITY = "parity"
 PARITY_MAP = {"NONE": 0, "EVEN": 1, "ODD": 2}
 
+# Frame filter configuration
+CONF_FILTERS = "filters"
+CONF_FILTER_DIRECTION = "direction"
+CONF_FILTER_PREFIX = "prefix"
+CONF_FILTER_ACTION = "action"
+
+DIRECTION_MAP = {"A_TO_B": 0, "B_TO_A": 1}
+ACTION_MAP = {"NORMAL": 0, "DROP": 1, "FORWARD_ONLY": 2, "LOG_ONLY": 3}
+
+FILTER_SCHEMA = cv.Schema({
+    cv.Required(CONF_FILTER_DIRECTION): cv.one_of("A_TO_B", "B_TO_A", upper=True),
+    cv.Required(CONF_FILTER_PREFIX): cv.ensure_list(cv.int_range(min=0, max=255)),
+    cv.Optional(CONF_FILTER_ACTION, default="NORMAL"): cv.one_of(
+        "NORMAL", "DROP", "FORWARD_ONLY", "LOG_ONLY", upper=True
+    ),
+})
+
 # IDF driver mode parameters
 CONF_USE_IDF_DRIVER = "use_idf_driver"
 CONF_IDF_UART_NUMS = "idf_uart_nums"                # [num_a, num_b]
@@ -71,6 +88,7 @@ CONFIG_SCHEMA = cv.Schema(
             cv.ensure_list(cv.int_),
             cv.Length(min=2, max=2)
         ),
+        cv.Optional(CONF_FILTERS, default=[]): cv.ensure_list(FILTER_SCHEMA),
     }
 ).extend(cv.COMPONENT_SCHEMA)
 
@@ -97,6 +115,14 @@ async def to_code(config):
     # Parity mapping to C++
     if CONF_PARITY in config:
         cg.add(var.set_parity_mode(PARITY_MAP[config[CONF_PARITY]]))
+
+    # Frame filters (optional)
+    if CONF_FILTERS in config:
+        for rule in config[CONF_FILTERS]:
+            dir_code = DIRECTION_MAP[rule[CONF_FILTER_DIRECTION]]
+            act_code = ACTION_MAP[rule[CONF_FILTER_ACTION]]
+            prefix = rule[CONF_FILTER_PREFIX]
+            cg.add(var.add_filter_rule(dir_code, prefix, act_code))
 
     # IDF / native driver mode
     if CONF_USE_IDF_DRIVER in config:
