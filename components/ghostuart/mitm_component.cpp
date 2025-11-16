@@ -219,9 +219,9 @@ void GhostUARTComponent::forward_frame_(Direction dir, const std::vector<uint8_t
       if (idx >= (int)sizeof(hex)) break;
     }
     hex[sizeof(hex) - 1] = '\0';
-    ESP_LOGD(TAG, "TX(%c) %u bytes data=[%s]%s",
-             (dir == Direction::A_TO_B ? 'B' : 'A'), (unsigned)frame.size(), hex,
-             (frame.size() > (size_t)max_dump ? " ..." : ""));
+    //ESP_LOGD(TAG, "TX(%c) %u bytes data=[%s]%s",
+    //         (dir == Direction::A_TO_B ? 'B' : 'A'), (unsigned)frame.size(), hex,
+    //         (frame.size() > (size_t)max_dump ? " ..." : ""));
   }
 
   int port = (dir == Direction::A_TO_B) ? idf_uart_num_b_ : idf_uart_num_a_;
