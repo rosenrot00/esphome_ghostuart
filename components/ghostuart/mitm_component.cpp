@@ -11,6 +11,7 @@
 namespace esphome {
 namespace ghostuart {
 
+
 static const char *TAG = "ghostuart";
 
 // ------------------------------- RX task -----------------------------------
@@ -155,27 +156,45 @@ void GhostUARTComponent::loop() {
     while (!q.empty()) {
       std::vector<uint8_t> frame = std::move(q.front());
       q.erase(q.begin());
-      if (debug_enabled_) {
+
+      // Apply per-instance filters
+      FilterAction act = match_filters_(dir, frame);
+      if (act == FilterAction::DROP) {
+        // Neither log nor forward
+        continue;
+      }
+
+      bool do_log = (act != FilterAction::FORWARD_ONLY);
+      bool do_forward = (act != FilterAction::LOG_ONLY);
+
+      // RX logging (frame-level)
+      if (debug_enabled_ && do_log) {
         // Build a short hex dump of up to 32 bytes
         char hex_rx[3 * 32 + 1];
         int max_dump_rx = frame.size() < 32 ? frame.size() : 32;
         int idx_rx = 0;
         for (int i = 0; i < max_dump_rx; ++i) {
-            idx_rx += snprintf(&hex_rx[idx_rx], sizeof(hex_rx) - idx_rx,
-                            "%02X%s", frame[i], (i + 1 < max_dump_rx ? " " : ""));
-            if (idx_rx >= (int)sizeof(hex_rx)) break;
+          idx_rx += snprintf(&hex_rx[idx_rx], sizeof(hex_rx) - idx_rx,
+                             "%02X%s", frame[i], (i + 1 < max_dump_rx ? " " : ""));
+          if (idx_rx >= (int)sizeof(hex_rx)) break;
         }
         hex_rx[sizeof(hex_rx) - 1] = '\0';
 
         // dir==A_TO_B bedeutet: empfangen auf A, weiter nach B -> Label RX(A)
         ESP_LOGD(TAG, "RX(%c) %u bytes data=[%s]%s",
-                (dir == Direction::A_TO_B ? 'A' : 'B'),
-                (unsigned)frame.size(),
-                hex_rx,
-                (frame.size() > (size_t)max_dump_rx ? " ..." : ""));
-        }
+                 (dir == Direction::A_TO_B ? 'A' : 'B'),
+                 (unsigned)frame.size(),
+                 hex_rx,
+                 (frame.size() > (size_t)max_dump_rx ? " ..." : ""));
+      }
+
+      // Always parse (filters do not affect variable extraction)
       parse_and_store_(frame);
-      forward_frame_(dir, frame);
+
+      // Forward only if permitted by filter
+      if (do_forward) {
+        forward_frame_(dir, frame);
+      }
     }
   }
 
@@ -205,6 +224,20 @@ void GhostUARTComponent::enqueue_ready_frame_(Direction dir, std::vector<uint8_t
   ready_frames_[static_cast<int>(dir)].push_back(std::move(frame));
 }
 
+// ------------------------ Filter matching -----------------------------------
+FilterAction GhostUARTComponent::match_filters_(Direction dir, const std::vector<uint8_t> &frame) const {
+  for (const auto &r : filters_) {
+    if (r.direction != dir) continue;
+    if (frame.size() < r.prefix.size()) continue;
+    bool ok = true;
+    for (size_t i = 0; i < r.prefix.size(); ++i) {
+      if (frame[i] != r.prefix[i]) { ok = false; break; }
+    }
+    if (ok) return r.action;
+  }
+  return FilterAction::NORMAL;
+}
+
 // ---------------------------- Forwarding -----------------------------------
 void GhostUARTComponent::forward_frame_(Direction dir, const std::vector<uint8_t> &frame) {
   if (frame.empty()) return;
@@ -219,9 +252,9 @@ void GhostUARTComponent::forward_frame_(Direction dir, const std::vector<uint8_t
       if (idx >= (int)sizeof(hex)) break;
     }
     hex[sizeof(hex) - 1] = '\0';
-    //ESP_LOGD(TAG, "TX(%c) %u bytes data=[%s]%s",
-    //         (dir == Direction::A_TO_B ? 'B' : 'A'), (unsigned)frame.size(), hex,
-    //         (frame.size() > (size_t)max_dump ? " ..." : ""));
+    ESP_LOGD(TAG, "TX(%c) %u bytes data=[%s]%s",
+             (dir == Direction::A_TO_B ? 'B' : 'A'), (unsigned)frame.size(), hex,
+             (frame.size() > (size_t)max_dump ? " ..." : ""));
   }
 
   int port = (dir == Direction::A_TO_B) ? idf_uart_num_b_ : idf_uart_num_a_;
