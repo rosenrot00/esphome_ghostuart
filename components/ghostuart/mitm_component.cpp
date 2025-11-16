@@ -238,6 +238,31 @@ FilterAction GhostUARTComponent::match_filters_(Direction dir, const std::vector
   return FilterAction::NORMAL;
 }
 
+// ------------------------ Filter rule addition ------------------------------
+void GhostUARTComponent::add_filter_rule(uint8_t dir_code,
+                                         const std::vector<uint8_t> &prefix,
+                                         uint8_t action_code) {
+  Direction dir = (dir_code == 1) ? Direction::B_TO_A : Direction::A_TO_B;
+  FilterAction act;
+  switch (action_code) {
+    case 1: act = FilterAction::DROP;         break;
+    case 2: act = FilterAction::FORWARD_ONLY; break;
+    case 3: act = FilterAction::LOG_ONLY;     break;
+    case 0:
+    default: act = FilterAction::NORMAL;      break;
+  }
+
+  FilterRule rule;
+  rule.direction = dir;
+  rule.prefix = prefix;
+  rule.action = act;
+  filters_.push_back(std::move(rule));
+
+  if (debug_enabled_) {
+    ESP_LOGI(TAG, "Added filter: dir=%d action=%d prefix_len=%u", (int)dir, (int)act, (unsigned)prefix.size());
+  }
+}
+
 // ---------------------------- Forwarding -----------------------------------
 void GhostUARTComponent::forward_frame_(Direction dir, const std::vector<uint8_t> &frame) {
   if (frame.empty()) return;
