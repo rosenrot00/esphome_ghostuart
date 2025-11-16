@@ -77,12 +77,27 @@ struct InjectJob {
   uint32_t created_ms{0};
 };
 
+
 struct StoredVar {
   bool        has_value{false};
   float       scaled{NAN};
   std::vector<uint8_t> last_raw;
   uint32_t    last_seen_ms{0};
   bool        persistent{false};
+};
+
+// Filter action for completed frames
+enum class FilterAction : uint8_t {
+  NORMAL = 0,     // log + forward
+  DROP,           // neither log nor forward
+  FORWARD_ONLY,   // forward but do not log RX
+  LOG_ONLY        // log RX but do not forward
+};
+
+struct FilterRule {
+  Direction direction;              // Direction::A_TO_B or Direction::B_TO_A
+  std::vector<uint8_t> prefix;      // Header prefix to match at the beginning of the frame
+  FilterAction action;
 };
 
 class GhostUARTComponent : public Component {
@@ -185,6 +200,12 @@ class GhostUARTComponent : public Component {
   // Enqueue a finished frame from RX task
   void enqueue_ready_frame_(Direction dir, std::vector<uint8_t> &&frame);
 
+  // Optional per-instance frame filters
+  std::vector<FilterRule> filters_;
+
+  // Match filters for a given frame and direction; returns FilterAction::NORMAL if no rule matches.
+  FilterAction match_filters_(Direction dir, const std::vector<uint8_t> &frame) const;
+
   // IDF/native-UART driver configuration & state (optional)
   bool use_idf_driver_{false};                // when true, initialize native IDF uart drivers and use event queues
   int  idf_uart_num_a_{-1};                   // UART port numbers (UART_NUM_0/1/2) for side A
@@ -210,7 +231,6 @@ class GhostUARTComponent : public Component {
   bool rx_task_enabled_{true};
 
   // Internals
-  void read_uart_(Direction dir);                  // legacy ESPHome UART path
   void on_silence_expired_(Direction dir);
   void forward_frame_(Direction dir, const std::vector<uint8_t> &frame);
   void parse_and_store_(const std::vector<uint8_t> &frame);
