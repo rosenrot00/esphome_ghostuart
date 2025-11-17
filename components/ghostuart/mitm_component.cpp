@@ -282,6 +282,59 @@ void GhostUARTComponent::add_mapping_rule(const Mapping &m) {
   }
 }
 
+// ------------------------ Simple field mapping addition --------------------
+void GhostUARTComponent::add_simple_field_mapping(uint8_t dir_code,
+                                                 const std::vector<uint8_t> &prefix,
+                                                 const std::string &name,
+                                                 uint16_t offset,
+                                                 uint8_t length,
+                                                 uint8_t format_code,
+                                                 float scale) {
+  // Map direction code (0=A_TO_B, 1=B_TO_A, 2=ANY)
+  Direction dir;
+  if (dir_code == 1)
+    dir = Direction::B_TO_A;
+  else if (dir_code == 2)
+    dir = Direction::ANY;
+  else
+    dir = Direction::A_TO_B;
+
+  // Map format code (aligned with FIELD_FORMAT_MAP in __init__.py)
+  FieldFormat fmt;
+  switch (format_code) {
+    case 0: fmt = FieldFormat::UINT8;      break;
+    case 1: fmt = FieldFormat::INT8;       break;
+    case 2: fmt = FieldFormat::UINT16_LE;  break;
+    case 3: fmt = FieldFormat::UINT16_BE;  break;
+    case 4: fmt = FieldFormat::INT16_LE;   break;
+    case 5: fmt = FieldFormat::INT16_BE;   break;
+    default: fmt = FieldFormat::UINT8;     break;
+  }
+
+  Mapping m;
+  m.name = name;
+  m.direction = dir;
+  FrameSelector sel;
+  sel.prefix = prefix;
+  m.selector = sel;
+
+  FieldDescriptor f;
+  f.name   = name;
+  f.offset = offset;
+  f.length = length;
+  f.format = fmt;
+  f.scale  = scale;
+  m.fields.push_back(f);
+
+  mappings_.push_back(m);
+
+  if (debug_enabled_) {
+    ESP_LOGI(TAG, "Added simple mapping '%s' (dir=%d, prefix_len=%u, offset=%u,len=%u,fmt=%u,scale=%f)",
+             name.c_str(), (int)dir, (unsigned)prefix.size(), (unsigned)offset,
+             (unsigned)length, (unsigned)format_code, (double)scale);
+  }
+}
+
 // ---------------------------- Forwarding -----------------------------------
 void GhostUARTComponent::forward_frame_(Direction dir, const std::vector<uint8_t> &frame) {
   if (frame.empty()) return;
