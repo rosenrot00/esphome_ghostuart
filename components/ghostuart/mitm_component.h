@@ -249,7 +249,7 @@ class GhostUARTComponent : public Component {
 
   // Internals
   void on_silence_expired_(Direction dir);
-  void forward_frame_(Direction dir, const std::vector<uint8_t> &frame);
+  void forward_frame_(Direction dir, const std::vector<uint8_t> &frame, bool suppress_tx_log = false);
   void parse_and_store_(Direction dir, const std::vector<uint8_t> &frame);
   bool selector_match_(const FrameSelector &sel, const std::vector<uint8_t> &frame) const;
 
