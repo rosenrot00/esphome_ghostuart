@@ -189,7 +189,7 @@ void GhostUARTComponent::loop() {
       }
 
       // Always parse (filters do not affect variable extraction)
-      parse_and_store_(frame);
+      parse_and_store_(dir, frame);
 
       // Forward only if permitted by filter
       if (do_forward) {
@@ -270,6 +270,18 @@ void GhostUARTComponent::add_filter_rule(uint8_t dir_code,
   }
 }
 
+// ------------------------ Mapping rule addition ------------------------------
+void GhostUARTComponent::add_mapping_rule(const Mapping &m) {
+  mappings_.push_back(m);
+  if (debug_enabled_) {
+    ESP_LOGI(TAG, "Added mapping rule '%s' (dir=%d, prefix_len=%u, fields=%u)",
+             m.name.c_str(),
+             static_cast<int>(m.direction),
+             (unsigned)m.selector.prefix.size(),
+             (unsigned)m.fields.size());
+  }
+}
+
 // ---------------------------- Forwarding -----------------------------------
 void GhostUARTComponent::forward_frame_(Direction dir, const std::vector<uint8_t> &frame) {
   if (frame.empty()) return;
@@ -304,8 +316,9 @@ void GhostUARTComponent::forward_frame_(Direction dir, const std::vector<uint8_t
 }
 
 // ----------------------------- Parsing -------------------------------------
-void GhostUARTComponent::parse_and_store_(const std::vector<uint8_t> &frame) {
+void GhostUARTComponent::parse_and_store_(Direction dir, const std::vector<uint8_t> &frame) {
   for (const auto &m : mappings_) {
+    if (m.direction != Direction::ANY && m.direction != dir) continue;
     if (!selector_match_(m.selector, frame)) continue;
     for (const auto &fd : m.fields) {
       std::string val_str;
