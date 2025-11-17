@@ -52,6 +52,7 @@ struct FrameSelector {
 struct Mapping {
   std::string                  name;
   FrameSelector                selector;
+  Direction                    direction{Direction::ANY};
   std::vector<FieldDescriptor> fields;
 };
 
@@ -133,6 +134,7 @@ class GhostUARTComponent : public Component {
 
   // Mappings & templates
   void add_mapping(const Mapping &m) { mappings_.push_back(m); }
+  void add_mapping_rule(const Mapping &m);
   void add_template(const FrameTemplate &t) { templates_.push_back(t); }
 
   // Variable access (scaled). Returns NAN if unknown.
@@ -236,7 +238,7 @@ class GhostUARTComponent : public Component {
   // Internals
   void on_silence_expired_(Direction dir);
   void forward_frame_(Direction dir, const std::vector<uint8_t> &frame);
-  void parse_and_store_(const std::vector<uint8_t> &frame);
+  void parse_and_store_(Direction dir, const std::vector<uint8_t> &frame);
   bool selector_match_(const FrameSelector &sel, const std::vector<uint8_t> &frame) const;
 
   bool decode_field_(const FieldDescriptor &fd,
