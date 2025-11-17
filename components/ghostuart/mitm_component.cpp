@@ -247,7 +247,8 @@ void GhostUARTComponent::loop() {
 
       // Forward only if permitted by filter
       if (do_forward) {
-        forward_frame_(dir, frame);
+        bool suppress_tx_log = (act == FilterAction::FORWARD_ONLY);
+        forward_frame_(dir, frame, suppress_tx_log);
       }
     }
   }
@@ -393,11 +394,11 @@ void GhostUARTComponent::add_simple_field_mapping(uint8_t dir_code,
 }
 
 // ---------------------------- Forwarding -----------------------------------
-void GhostUARTComponent::forward_frame_(Direction dir, const std::vector<uint8_t> &frame) {
+void GhostUARTComponent::forward_frame_(Direction dir, const std::vector<uint8_t> &frame, bool suppress_tx_log) {
   if (frame.empty()) return;
 
-  // Debug before sending (always dump up to 32 bytes)
-  if (debug_enabled_) {
+  // Debug before sending (always dump up to 32 bytes) unless suppressed
+  if (debug_enabled_ && !suppress_tx_log) {
     char hex[3 * 32 + 1];
     int max_dump = frame.size() < 32 ? frame.size() : 32;
     int idx = 0;
@@ -665,7 +666,7 @@ void GhostUARTComponent::process_inject_queue_() {
   }
 
   // Reuse normal TX path (handles IDF/legacy and logging):
-  forward_frame_(target_dir, frame);
+  forward_frame_(target_dir, frame, false);
 
   ESP_LOGI(TAG, "Injected frame (%u bytes) via template '%s' to %c",
            (unsigned)frame.size(), job.template_name.c_str(),
