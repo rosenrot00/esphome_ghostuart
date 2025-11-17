@@ -28,11 +28,11 @@ CONF_FILTER_DIRECTION = "direction"
 CONF_FILTER_PREFIX = "prefix"
 CONF_FILTER_ACTION = "action"
 
-DIRECTION_MAP = {"A_TO_B": 0, "B_TO_A": 1}
+DIRECTION_MAP = {"A_TO_B": 0, "B_TO_A": 1, "ANY": 2}
 ACTION_MAP = {"NORMAL": 0, "DROP": 1, "FORWARD_ONLY": 2, "LOG_ONLY": 3}
 
 FILTER_SCHEMA = cv.Schema({
-    cv.Required(CONF_FILTER_DIRECTION): cv.one_of("A_TO_B", "B_TO_A", upper=True),
+    cv.Required(CONF_FILTER_DIRECTION): cv.one_of("A_TO_B", "B_TO_A", "ANY", upper=True),
     cv.Required(CONF_FILTER_PREFIX): cv.ensure_list(cv.int_range(min=0, max=255)),
     cv.Optional(CONF_FILTER_ACTION, default="NORMAL"): cv.one_of(
         "NORMAL", "DROP", "FORWARD_ONLY", "LOG_ONLY", upper=True
