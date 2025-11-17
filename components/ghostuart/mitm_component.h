@@ -26,7 +26,7 @@ constexpr uint32_t DEFAULT_SILENCE_MS = 15;        // 0 = auto (from baud)
 constexpr uint32_t DEFAULT_PRE_LISTEN_MS = 3;      // 0 = auto (from baud)
 constexpr uint8_t  DEFAULT_MAX_RETRIES = 2;
 
-enum class Direction : uint8_t { A_TO_B = 0, B_TO_A = 1 };
+enum class Direction : uint8_t { A_TO_B = 0, B_TO_A = 1, ANY = 2 };
 
 enum class FieldFormat : uint8_t {
   UINT8, INT8, UINT16_LE, UINT16_BE, INT16_LE, INT16_BE,
