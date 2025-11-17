@@ -1,37 +1,6 @@
 import esphome.codegen as cg
 import esphome.config_validation as cv
-# Mapping configuration
-CONF_MAPPINGS = "mappings"
-CONF_FIELDS = "fields"
-CONF_FIELD_NAME = "name"
-CONF_FIELD_OFFSET = "offset"
-CONF_FIELD_LENGTH = "length"
-CONF_FIELD_FORMAT = "format"
-CONF_FIELD_SCALE = "scale"
 
-FIELD_FORMAT_MAP = {
-    "UINT8": 0,
-    "INT8": 1,
-    "UINT16_LE": 2,
-    "UINT16_BE": 3,
-    "INT16_LE": 4,
-    "INT16_BE": 5,
-}
-
-FIELD_SCHEMA = cv.Schema({
-    cv.Required(CONF_FIELD_NAME): cv.string,
-    cv.Required(CONF_FIELD_OFFSET): cv.int_range(min=0, max=65535),
-    cv.Required(CONF_FIELD_LENGTH): cv.int_range(min=1, max=8),
-    cv.Required(CONF_FIELD_FORMAT): cv.one_of(*FIELD_FORMAT_MAP.keys(), upper=True),
-    cv.Optional(CONF_FIELD_SCALE, default=1.0): cv.float_,
-})
-
-MAPPING_SCHEMA = cv.Schema({
-    cv.Required("name"): cv.string,
-    cv.Required(CONF_FILTER_DIRECTION): cv.one_of("A_TO_B", "B_TO_A", "ANY", upper=True),
-    cv.Required(CONF_FILTER_PREFIX): cv.ensure_list(cv.int_range(min=0, max=255)),
-    cv.Required(CONF_FIELDS): cv.ensure_list(FIELD_SCHEMA),
-})
 from esphome.components import uart
 from esphome.const import CONF_ID
 
@@ -69,6 +38,39 @@ FILTER_SCHEMA = cv.Schema({
     cv.Optional(CONF_FILTER_ACTION, default="NORMAL"): cv.one_of(
         "NORMAL", "DROP", "FORWARD_ONLY", "LOG_ONLY", upper=True
     ),
+})
+
+# Mapping configuration
+CONF_MAPPINGS = "mappings"
+CONF_FIELDS = "fields"
+CONF_FIELD_NAME = "name"
+CONF_FIELD_OFFSET = "offset"
+CONF_FIELD_LENGTH = "length"
+CONF_FIELD_FORMAT = "format"
+CONF_FIELD_SCALE = "scale"
+
+FIELD_FORMAT_MAP = {
+    "UINT8": 0,
+    "INT8": 1,
+    "UINT16_LE": 2,
+    "UINT16_BE": 3,
+    "INT16_LE": 4,
+    "INT16_BE": 5,
+}
+
+FIELD_SCHEMA = cv.Schema({
+    cv.Required(CONF_FIELD_NAME): cv.string,
+    cv.Required(CONF_FIELD_OFFSET): cv.int_range(min=0, max=65535),
+    cv.Required(CONF_FIELD_LENGTH): cv.int_range(min=1, max=8),
+    cv.Required(CONF_FIELD_FORMAT): cv.one_of(*FIELD_FORMAT_MAP.keys(), upper=True),
+    cv.Optional(CONF_FIELD_SCALE, default=1.0): cv.float_,
+})
+
+MAPPING_SCHEMA = cv.Schema({
+    cv.Required("name"): cv.string,
+    cv.Required(CONF_FILTER_DIRECTION): cv.one_of("A_TO_B", "B_TO_A", "ANY", upper=True),
+    cv.Required(CONF_FILTER_PREFIX): cv.ensure_list(cv.int_range(min=0, max=255)),
+    cv.Required(CONF_FIELDS): cv.ensure_list(FIELD_SCHEMA),
 })
 
 # IDF driver mode parameters
