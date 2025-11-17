@@ -1,3 +1,5 @@
+import esphome.codegen as cg
+import esphome.config_validation as cv
 # Mapping configuration
 CONF_MAPPINGS = "mappings"
 CONF_FIELDS = "fields"
@@ -30,8 +32,6 @@ MAPPING_SCHEMA = cv.Schema({
     cv.Required(CONF_FILTER_PREFIX): cv.ensure_list(cv.int_range(min=0, max=255)),
     cv.Required(CONF_FIELDS): cv.ensure_list(FIELD_SCHEMA),
 })
-import esphome.codegen as cg
-import esphome.config_validation as cv
 from esphome.components import uart
 from esphome.const import CONF_ID
 
