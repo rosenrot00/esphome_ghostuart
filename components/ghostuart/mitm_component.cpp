@@ -170,7 +170,7 @@ void GhostUARTComponent::loop() {
       // RX logging (only when changed if filter requests it)
       if (debug_enabled_ && do_log) {
         bool changed = true;
-        const FilterRule *matched_rule = nullptr;
+        FilterRule *matched_rule = nullptr;
 
         // Find matching rule to check log_change_only
         for (auto &r : filters_) {
