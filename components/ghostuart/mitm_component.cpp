@@ -227,7 +227,7 @@ void GhostUARTComponent::enqueue_ready_frame_(Direction dir, std::vector<uint8_t
 // ------------------------ Filter matching -----------------------------------
 FilterAction GhostUARTComponent::match_filters_(Direction dir, const std::vector<uint8_t> &frame) const {
   for (const auto &r : filters_) {
-    if (r.direction != dir) continue;
+    if (r.direction != dir && r.direction != Direction::ANY) continue;
     if (frame.size() < r.prefix.size()) continue;
     bool ok = true;
     for (size_t i = 0; i < r.prefix.size(); ++i) {
@@ -242,7 +242,14 @@ FilterAction GhostUARTComponent::match_filters_(Direction dir, const std::vector
 void GhostUARTComponent::add_filter_rule(uint8_t dir_code,
                                          const std::vector<uint8_t> &prefix,
                                          uint8_t action_code) {
-  Direction dir = (dir_code == 1) ? Direction::B_TO_A : Direction::A_TO_B;
+  Direction dir;
+  if (dir_code == 1)
+    dir = Direction::B_TO_A;
+  else if (dir_code == 2)
+    dir = Direction::ANY;
+  else
+    dir = Direction::A_TO_B;
+
   FilterAction act;
   switch (action_code) {
     case 1: act = FilterAction::DROP;         break;
