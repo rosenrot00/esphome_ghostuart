@@ -167,25 +167,79 @@ void GhostUARTComponent::loop() {
       bool do_log = (act != FilterAction::FORWARD_ONLY);
       bool do_forward = (act != FilterAction::LOG_ONLY);
 
-      // RX logging (frame-level)
+      // RX logging (only when changed if filter requests it)
       if (debug_enabled_ && do_log) {
-        // Build a short hex dump of up to 32 bytes
-        char hex_rx[3 * 32 + 1];
-        int max_dump_rx = frame.size() < 32 ? frame.size() : 32;
-        int idx_rx = 0;
-        for (int i = 0; i < max_dump_rx; ++i) {
-          idx_rx += snprintf(&hex_rx[idx_rx], sizeof(hex_rx) - idx_rx,
-                             "%02X%s", frame[i], (i + 1 < max_dump_rx ? " " : ""));
-          if (idx_rx >= (int)sizeof(hex_rx)) break;
-        }
-        hex_rx[sizeof(hex_rx) - 1] = '\0';
+        bool changed = true;
+        const FilterRule *matched_rule = nullptr;
 
-        // dir==A_TO_B bedeutet: empfangen auf A, weiter nach B -> Label RX(A)
-        ESP_LOGD(TAG, "RX(%c) %u bytes data=[%s]%s",
-                 (dir == Direction::A_TO_B ? 'A' : 'B'),
-                 (unsigned)frame.size(),
-                 hex_rx,
-                 (frame.size() > (size_t)max_dump_rx ? " ..." : ""));
+        // Find matching rule to check log_change_only
+        for (auto &r : filters_) {
+          if (r.direction != dir && r.direction != Direction::ANY) continue;
+          if (frame.size() < r.prefix.size()) continue;
+          bool ok = true;
+          for (size_t i = 0; i < r.prefix.size(); ++i) {
+            if (frame[i] != r.prefix[i]) { ok = false; break; }
+          }
+          if (!ok) continue;
+          matched_rule = &r;
+
+          if (r.log_change_only) {
+            if (!r.last_logged_frame.empty() && r.last_logged_frame.size() == frame.size()) {
+              changed = std::memcmp(r.last_logged_frame.data(), frame.data(), frame.size()) != 0;
+            }
+          }
+          break;  // first matching rule wins
+        }
+
+        if (!changed) {
+          continue;  // do NOT log unchanged frames
+        }
+
+        // Build hex dumps for NEW frame
+        char hex_new[3 * 32 + 1];
+        int max_new = frame.size() < 32 ? frame.size() : 32;
+        int idx_new = 0;
+        for (int i = 0; i < max_new; ++i) {
+          idx_new += snprintf(&hex_new[idx_new], sizeof(hex_new) - idx_new,
+                              "%02X%s", frame[i], (i + 1 < max_new ? " " : ""));
+          if (idx_new >= (int)sizeof(hex_new)) break;
+        }
+        hex_new[sizeof(hex_new) - 1] = '\0';
+
+        // Build hex dumps for OLD frame (if available)
+        char hex_old[3 * 32 + 1] = "";
+        if (matched_rule && !matched_rule->last_logged_frame.empty()) {
+          const auto &old = matched_rule->last_logged_frame;
+          int max_old = old.size() < 32 ? old.size() : 32;
+          int idx_old = 0;
+          for (int i = 0; i < max_old; ++i) {
+            idx_old += snprintf(&hex_old[idx_old], sizeof(hex_old) - idx_old,
+                                "%02X%s", old[i], (i + 1 < max_old ? " " : ""));
+            if (idx_old >= (int)sizeof(hex_old)) break;
+          }
+          hex_old[sizeof(hex_old) - 1] = '\0';
+        }
+
+        // Log change with both OLD and NEW frames
+        if (matched_rule && matched_rule->log_change_only) {
+          ESP_LOGD(TAG, "RX(%c) CHANGED -> OLD=[%s] NEW=[%s]%s",
+                  (dir == Direction::A_TO_B ? 'A' : 'B'),
+                  hex_old,
+                  hex_new,
+                  (frame.size() > (size_t)max_new ? " ..." : ""));
+        } else {
+          // Normal log
+          ESP_LOGD(TAG, "RX(%c) %u bytes data=[%s]%s",
+                  (dir == Direction::A_TO_B ? 'A' : 'B'),
+                  (unsigned)frame.size(),
+                  hex_new,
+                  (frame.size() > (size_t)max_new ? " ..." : ""));
+        }
+
+        // Update snapshot
+        if (matched_rule) {
+          matched_rule->last_logged_frame = frame;
+        }
       }
 
       // Always parse (filters do not affect variable extraction)
@@ -241,7 +295,8 @@ FilterAction GhostUARTComponent::match_filters_(Direction dir, const std::vector
 // ------------------------ Filter rule addition ------------------------------
 void GhostUARTComponent::add_filter_rule(uint8_t dir_code,
                                          const std::vector<uint8_t> &prefix,
-                                         uint8_t action_code) {
+                                         uint8_t action_code,
+                                         bool log_change_only) {
   Direction dir;
   if (dir_code == 1)
     dir = Direction::B_TO_A;
@@ -263,10 +318,12 @@ void GhostUARTComponent::add_filter_rule(uint8_t dir_code,
   rule.direction = dir;
   rule.prefix = prefix;
   rule.action = act;
+  rule.log_change_only = log_change_only;
   filters_.push_back(std::move(rule));
 
   if (debug_enabled_) {
-    ESP_LOGI(TAG, "Added filter: dir=%d action=%d prefix_len=%u", (int)dir, (int)act, (unsigned)prefix.size());
+    ESP_LOGI(TAG, "Added filter: dir=%d action=%d prefix_len=%u log_change_only=%d",
+             (int)dir, (int)act, (unsigned)prefix.size(), (int)log_change_only);
   }
 }
 
