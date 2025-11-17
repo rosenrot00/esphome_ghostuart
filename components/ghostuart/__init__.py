@@ -1,3 +1,35 @@
+# Mapping configuration
+CONF_MAPPINGS = "mappings"
+CONF_FIELDS = "fields"
+CONF_FIELD_NAME = "name"
+CONF_FIELD_OFFSET = "offset"
+CONF_FIELD_LENGTH = "length"
+CONF_FIELD_FORMAT = "format"
+CONF_FIELD_SCALE = "scale"
+
+FIELD_FORMAT_MAP = {
+    "UINT8": 0,
+    "INT8": 1,
+    "UINT16_LE": 2,
+    "UINT16_BE": 3,
+    "INT16_LE": 4,
+    "INT16_BE": 5,
+}
+
+FIELD_SCHEMA = cv.Schema({
+    cv.Required(CONF_FIELD_NAME): cv.string,
+    cv.Required(CONF_FIELD_OFFSET): cv.int_range(min=0, max=65535),
+    cv.Required(CONF_FIELD_LENGTH): cv.int_range(min=1, max=8),
+    cv.Required(CONF_FIELD_FORMAT): cv.one_of(*FIELD_FORMAT_MAP.keys(), upper=True),
+    cv.Optional(CONF_FIELD_SCALE, default=1.0): cv.float_,
+})
+
+MAPPING_SCHEMA = cv.Schema({
+    cv.Required("name"): cv.string,
+    cv.Required(CONF_FILTER_DIRECTION): cv.one_of("A_TO_B", "B_TO_A", "ANY", upper=True),
+    cv.Required(CONF_FILTER_PREFIX): cv.ensure_list(cv.int_range(min=0, max=255)),
+    cv.Required(CONF_FIELDS): cv.ensure_list(FIELD_SCHEMA),
+})
 import esphome.codegen as cg
 import esphome.config_validation as cv
 from esphome.components import uart
@@ -89,6 +121,7 @@ CONFIG_SCHEMA = cv.Schema(
             cv.Length(min=2, max=2)
         ),
         cv.Optional(CONF_FILTERS, default=[]): cv.ensure_list(FILTER_SCHEMA),
+        cv.Optional(CONF_MAPPINGS, default=[]): cv.ensure_list(MAPPING_SCHEMA),
     }
 ).extend(cv.COMPONENT_SCHEMA)
 
@@ -123,6 +156,19 @@ async def to_code(config):
             act_code = ACTION_MAP[rule[CONF_FILTER_ACTION]]
             prefix = rule[CONF_FILTER_PREFIX]
             cg.add(var.add_filter_rule(dir_code, prefix, act_code))
+
+    # Frame mappings (optional)
+    if CONF_MAPPINGS in config:
+        for mapping in config[CONF_MAPPINGS]:
+            dir_code = DIRECTION_MAP[mapping[CONF_FILTER_DIRECTION]]
+            prefix = mapping[CONF_FILTER_PREFIX]
+            for field in mapping[CONF_FIELDS]:
+                name = field[CONF_FIELD_NAME]
+                offset = field[CONF_FIELD_OFFSET]
+                length = field[CONF_FIELD_LENGTH]
+                fmt_code = FIELD_FORMAT_MAP[field[CONF_FIELD_FORMAT]]
+                scale = field.get(CONF_FIELD_SCALE, 1.0)
+                cg.add(var.add_simple_field_mapping(dir_code, prefix, name, offset, length, fmt_code, scale))
 
     # IDF / native driver mode
     if CONF_USE_IDF_DRIVER in config:
