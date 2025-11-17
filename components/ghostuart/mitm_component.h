@@ -135,6 +135,14 @@ class GhostUARTComponent : public Component {
   // Mappings & templates
   void add_mapping(const Mapping &m) { mappings_.push_back(m); }
   void add_mapping_rule(const Mapping &m);
+  // Add a simple mapping for a single field (used by YAML/codegen)
+  void add_simple_field_mapping(uint8_t dir_code,
+                                const std::vector<uint8_t> &prefix,
+                                const std::string &name,
+                                uint16_t offset,
+                                uint8_t length,
+                                uint8_t format_code,
+                                float scale);
   void add_template(const FrameTemplate &t) { templates_.push_back(t); }
 
   // Variable access (scaled). Returns NAN if unknown.
