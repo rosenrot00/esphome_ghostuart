@@ -385,12 +385,20 @@ void GhostUARTComponent::parse_and_store_(Direction dir, const std::vector<uint8
         continue;
       }
       StoredVar &sv = vars_[fd.name];
+
+      // Detect change: compare raw bytes with previous value
+      bool changed = true;
+      if (sv.has_value && sv.last_raw.size() == raw.size()) {
+        changed = std::memcmp(sv.last_raw.data(), raw.data(), raw.size()) != 0;
+      }
+
       sv.has_value = true;
       sv.scaled = val_scaled;
       sv.last_raw = raw;
       sv.last_seen_ms = millis();
       sv.persistent = fd.persist;
-      if (debug_enabled_) {
+
+      if (debug_enabled_ && changed) {
         ESP_LOGD(TAG, "Stored var %s = %s (raw=%uB)", fd.name.c_str(), val_str.c_str(), (unsigned)raw.size());
       }
     }
