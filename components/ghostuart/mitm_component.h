@@ -96,9 +96,13 @@ enum class FilterAction : uint8_t {
 };
 
 struct FilterRule {
-  Direction direction;              // Direction::A_TO_B or Direction::B_TO_A
+  Direction direction;              // Direction::A_TO_B or Direction::B_TO_A or ANY
   std::vector<uint8_t> prefix;      // Header prefix to match at the beginning of the frame
   FilterAction action;
+
+  // Optional: only log RX frames for this rule when the frame content changes
+  bool log_change_only{false};
+  std::vector<uint8_t> last_logged_frame;  // last frame snapshot for change detection
 };
 
 class GhostUARTComponent : public Component {
@@ -127,7 +131,7 @@ class GhostUARTComponent : public Component {
   void set_idf_uart_pins_b(int tx, int rx) { idf_tx_pin_b_ = tx; idf_rx_pin_b_ = rx; }
 
   // Add a frame filter rule from numeric codes (used by YAML/codegen)
-  void add_filter_rule(uint8_t dir_code, const std::vector<uint8_t> &prefix, uint8_t action_code);
+  void add_filter_rule(uint8_t dir_code, const std::vector<uint8_t> &prefix, uint8_t action_code, bool log_change_only);
 
   // Debug control
   void set_debug(bool en);
