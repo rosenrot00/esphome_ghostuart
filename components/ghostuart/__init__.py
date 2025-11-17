@@ -28,6 +28,7 @@ CONF_FILTERS = "filters"
 CONF_FILTER_DIRECTION = "direction"
 CONF_FILTER_PREFIX = "prefix"
 CONF_FILTER_ACTION = "action"
+CONF_FILTER_LOG_CHANGE_ONLY = "log_change_only"
 
 DIRECTION_MAP = {"A_TO_B": 0, "B_TO_A": 1, "ANY": 2}
 ACTION_MAP = {"NORMAL": 0, "DROP": 1, "FORWARD_ONLY": 2, "LOG_ONLY": 3}
@@ -38,6 +39,7 @@ FILTER_SCHEMA = cv.Schema({
     cv.Optional(CONF_FILTER_ACTION, default="NORMAL"): cv.one_of(
         "NORMAL", "DROP", "FORWARD_ONLY", "LOG_ONLY", upper=True
     ),
+    cv.Optional(CONF_FILTER_LOG_CHANGE_ONLY, default=False): cv.boolean,
 })
 
 # Mapping configuration
@@ -157,7 +159,8 @@ async def to_code(config):
             dir_code = DIRECTION_MAP[rule[CONF_FILTER_DIRECTION]]
             act_code = ACTION_MAP[rule[CONF_FILTER_ACTION]]
             prefix = rule[CONF_FILTER_PREFIX]
-            cg.add(var.add_filter_rule(dir_code, prefix, act_code))
+            log_change = rule.get(CONF_FILTER_LOG_CHANGE_ONLY, False)
+            cg.add(var.add_filter_rule(dir_code, prefix, act_code, log_change))
 
     # Frame mappings (optional)
     if CONF_MAPPINGS in config:
