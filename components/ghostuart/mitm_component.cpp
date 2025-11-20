@@ -52,7 +52,7 @@ void GhostUARTComponent::recompute_timing_() {
   if (silence_ms_cfg_ > 0) {
     silence_ms_eff_ = silence_ms_cfg_;
   } else {
-    uint32_t auto_ms = static_cast<uint32_t>(std::ceil(10.0f * char_ms));
+    uint32_t auto_ms = static_cast<uint32_t>(std::ceil(3.0f * char_ms));
     if (auto_ms < 3) auto_ms = 3;
     if (auto_ms > 300) auto_ms = 300;
     silence_ms_eff_ = auto_ms;
