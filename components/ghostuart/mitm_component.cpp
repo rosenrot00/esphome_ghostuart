@@ -456,9 +456,9 @@ void GhostUARTComponent::parse_and_store_(Direction dir, const std::vector<uint8
       sv.last_seen_ms = millis();
       sv.persistent = fd.persist;
 
-      if (debug_enabled_ && changed) {
-        ESP_LOGD(TAG, "Stored var %s = %s (raw=%uB)", fd.name.c_str(), val_str.c_str(), (unsigned)raw.size());
-      }
+      //if (debug_enabled_ && changed) {
+      //  ESP_LOGD(TAG, "Stored var %s = %s (raw=%uB)", fd.name.c_str(), val_str.c_str(), (unsigned)raw.size());
+      //}
     }
   }
 }
