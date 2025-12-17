@@ -15,6 +15,12 @@
 #include "freertos/queue.h"
 
 namespace esphome {
+namespace text_sensor {
+class TextSensor;
+}
+}
+
+namespace esphome {
 namespace ghostuart {
 
 // Defaults (can be overridden via YAML setters)
@@ -95,6 +101,12 @@ enum class FilterAction : uint8_t {
   LOG_ONLY        // log RX but do not forward
 };
 
+enum class PushMode : uint8_t {
+  NEVER = 0,
+  MATCH = 1,
+  CHANGE = 2,
+};
+
 struct FilterRule {
   Direction direction;              // Direction::A_TO_B or Direction::B_TO_A or ANY
   std::vector<uint8_t> prefix;      // Header prefix to match at the beginning of the frame
@@ -103,6 +115,9 @@ struct FilterRule {
   // Optional: only log RX frames for this rule when the frame content changes
   bool log_change_only{false};
   std::vector<uint8_t> last_logged_frame;  // last frame snapshot for change detection
+
+  PushMode push_mode{PushMode::NEVER};
+  std::vector<uint8_t> last_pushed_frame;  // snapshot for push: change
 };
 
 class GhostUARTComponent : public Component {
@@ -131,7 +146,11 @@ class GhostUARTComponent : public Component {
   void set_idf_uart_pins_b(int tx, int rx) { idf_tx_pin_b_ = tx; idf_rx_pin_b_ = rx; }
 
   // Add a frame filter rule from numeric codes (used by YAML/codegen)
-  void add_filter_rule(uint8_t dir_code, const std::vector<uint8_t> &prefix, uint8_t action_code, bool log_change_only);
+  void add_filter_rule(uint8_t dir_code,
+                       const std::vector<uint8_t> &prefix,
+                       uint8_t action_code,
+                       bool log_change_only,
+                       uint8_t push_mode_code);
 
   // Debug control
   void set_debug(bool en);
@@ -155,6 +174,11 @@ class GhostUARTComponent : public Component {
   // Enqueue an inject job by template name and optional overrides.
   bool send_template(const std::string &template_name,
                      const std::unordered_map<std::string, std::string> &overrides);
+
+  // Optional: push "changed frame" log lines to Home Assistant
+  void set_changed_frame_text_sensor(esphome::text_sensor::TextSensor *s) {
+    this->changed_frame_text_sensor_ = s;
+  }
 
   // Stats
   uint32_t get_frames_forwarded(Direction dir) const { return frames_forwarded_[static_cast<int>(dir)]; }
@@ -239,6 +263,9 @@ class GhostUARTComponent : public Component {
   QueueHandle_t idf_uart_queue_b_{nullptr};
   bool idf_driver_installed_a_{false};
   bool idf_driver_installed_b_{false};
+
+  // Optional text sensor for pushing changed-frame log lines to Home Assistant
+  esphome::text_sensor::TextSensor *changed_frame_text_sensor_{nullptr};
 
   // Debug flag
   bool debug_enabled_{false};
