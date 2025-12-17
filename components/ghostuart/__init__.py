@@ -1,7 +1,7 @@
 import esphome.codegen as cg
 import esphome.config_validation as cv
 
-from esphome.components import uart
+from esphome.components import uart, text_sensor
 from esphome.const import CONF_ID
 
 AUTO_LOAD = ["uart"]
@@ -18,6 +18,7 @@ CONF_PRE_LISTEN_MS = "pre_listen_ms"
 CONF_MAX_RETRIES = "max_retries"
 CONF_DEBUG = "debug"
 CONF_BAUD = "baud"
+CONF_CHANGED_FRAME_TEXT_SENSOR = "changed_frame_text_sensor"
 
 # Parity option (NONE/EVEN/ODD)
 CONF_PARITY = "parity"
@@ -29,6 +30,7 @@ CONF_FILTER_DIRECTION = "direction"
 CONF_FILTER_PREFIX = "prefix"
 CONF_FILTER_ACTION = "action"
 CONF_FILTER_LOG_CHANGE_ONLY = "log_change_only"
+CONF_FILTER_PUSH = "push"
 
 DIRECTION_MAP = {"A_TO_B": 0, "B_TO_A": 1, "ANY": 2}
 ACTION_MAP = {"NORMAL": 0, "DROP": 1, "FORWARD_ONLY": 2, "LOG_ONLY": 3}
@@ -40,6 +42,7 @@ FILTER_SCHEMA = cv.Schema({
         "NORMAL", "DROP", "FORWARD_ONLY", "LOG_ONLY", upper=True
     ),
     cv.Optional(CONF_FILTER_LOG_CHANGE_ONLY, default=False): cv.boolean,
+    cv.Optional(CONF_FILTER_PUSH): cv.enum({"never": 0, "match": 1, "change": 2}, lower=True),
 })
 
 # Mapping configuration
@@ -90,6 +93,9 @@ CONFIG_SCHEMA = cv.Schema(
         # Legacy ESPHome UART configuration (optional, for compatibility)
         cv.Optional(CONF_UART_A): cv.use_id(uart.UARTComponent),
         cv.Optional(CONF_UART_B): cv.use_id(uart.UARTComponent),
+
+        # Optional: push "changed frame" log lines to Home Assistant via a text sensor
+        cv.Optional(CONF_CHANGED_FRAME_TEXT_SENSOR): cv.use_id(text_sensor.TextSensor),
 
         # Frame and timing
         cv.Optional(CONF_MAX_FRAME, default=512): cv.int_range(min=32, max=4096),
@@ -142,6 +148,11 @@ async def to_code(config):
         uart_b = await cg.get_variable(config[CONF_UART_B])
         cg.add(var.set_uart_b(uart_b))
 
+    # Optional: Home Assistant text sensor for changed-frame log lines
+    if CONF_CHANGED_FRAME_TEXT_SENSOR in config:
+        ts = await cg.get_variable(config[CONF_CHANGED_FRAME_TEXT_SENSOR])
+        cg.add(var.set_changed_frame_text_sensor(ts))
+
     # Basic timings and debug
     cg.add(var.set_baud(config[CONF_BAUD]))
     cg.add(var.set_max_frame(config[CONF_MAX_FRAME]))
@@ -160,7 +171,8 @@ async def to_code(config):
             act_code = ACTION_MAP[rule[CONF_FILTER_ACTION]]
             prefix = rule[CONF_FILTER_PREFIX]
             log_change = rule.get(CONF_FILTER_LOG_CHANGE_ONLY, False)
-            cg.add(var.add_filter_rule(dir_code, prefix, act_code, log_change))
+            push_mode = rule.get(CONF_FILTER_PUSH, 0)
+            cg.add(var.add_filter_rule(dir_code, prefix, act_code, log_change, push_mode))
 
     # Frame mappings (optional)
     if CONF_MAPPINGS in config:
