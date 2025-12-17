@@ -4,6 +4,7 @@
 #include "mitm_component.h"
 #include "esphome/core/log.h"
 #include "esphome/core/helpers.h"
+#include "esphome/components/text_sensor/text_sensor.h"
 
 #include <cstring>
 #include <cmath>
@@ -167,6 +168,75 @@ void GhostUARTComponent::loop() {
       bool do_log = (act != FilterAction::FORWARD_ONLY);
       bool do_forward = (act != FilterAction::LOG_ONLY);
 
+      // Optional: push matched/changed frames to Home Assistant via a text_sensor
+      FilterRule *push_rule = nullptr;
+      for (auto &r : filters_) {
+        if (r.direction != dir && r.direction != Direction::ANY) continue;
+        if (frame.size() < r.prefix.size()) continue;
+        bool ok = true;
+        for (size_t i = 0; i < r.prefix.size(); ++i) {
+          if (frame[i] != r.prefix[i]) { ok = false; break; }
+        }
+        if (!ok) continue;
+        push_rule = &r;
+        break;  // first matching rule wins
+      }
+
+      if (push_rule != nullptr && this->changed_frame_text_sensor_ != nullptr && push_rule->push_mode != PushMode::NEVER) {
+        // Build hex for NEW frame (up to 32 bytes)
+        char hex_new_push[3 * 32 + 1];
+        int max_new_push = frame.size() < 32 ? frame.size() : 32;
+        int idx_new_push = 0;
+        for (int i = 0; i < max_new_push; ++i) {
+          idx_new_push += snprintf(&hex_new_push[idx_new_push], sizeof(hex_new_push) - idx_new_push,
+                                   "%02X%s", frame[i], (i + 1 < max_new_push ? " " : ""));
+          if (idx_new_push >= (int)sizeof(hex_new_push)) break;
+        }
+        hex_new_push[sizeof(hex_new_push) - 1] = '\0';
+
+        bool do_push = true;
+        char hex_old_push[3 * 32 + 1] = "";
+        if (push_rule->push_mode == PushMode::CHANGE) {
+          do_push = true;
+          if (!push_rule->last_pushed_frame.empty() && push_rule->last_pushed_frame.size() == frame.size()) {
+            do_push = std::memcmp(push_rule->last_pushed_frame.data(), frame.data(), frame.size()) != 0;
+          }
+          if (do_push && !push_rule->last_pushed_frame.empty()) {
+            const auto &old = push_rule->last_pushed_frame;
+            int max_old_push = old.size() < 32 ? old.size() : 32;
+            int idx_old_push = 0;
+            for (int i = 0; i < max_old_push; ++i) {
+              idx_old_push += snprintf(&hex_old_push[idx_old_push], sizeof(hex_old_push) - idx_old_push,
+                                       "%02X%s", old[i], (i + 1 < max_old_push ? " " : ""));
+              if (idx_old_push >= (int)sizeof(hex_old_push)) break;
+            }
+            hex_old_push[sizeof(hex_old_push) - 1] = '\0';
+          }
+        }
+
+        if (do_push) {
+          char msg[256];
+          if (push_rule->push_mode == PushMode::CHANGE) {
+            snprintf(msg, sizeof(msg), "t=%lu RX(%c) CHANGED OLD=[%s] NEW=[%s]%s",
+                     (unsigned long) millis(),
+                     (dir == Direction::A_TO_B ? 'A' : 'B'),
+                     hex_old_push,
+                     hex_new_push,
+                     (frame.size() > (size_t)max_new_push ? " ..." : ""));
+          } else {
+            // MATCH mode: push every matched frame
+            snprintf(msg, sizeof(msg), "t=%lu RX(%c) MATCH %uB data=[%s]%s",
+                     (unsigned long) millis(),
+                     (dir == Direction::A_TO_B ? 'A' : 'B'),
+                     (unsigned)frame.size(),
+                     hex_new_push,
+                     (frame.size() > (size_t)max_new_push ? " ..." : ""));
+          }
+          this->changed_frame_text_sensor_->publish_state(std::string(msg));
+          push_rule->last_pushed_frame = frame;
+        }
+      }
+
       // RX logging (only when changed if filter requests it)
       if (debug_enabled_ && do_log) {
         bool changed = true;
@@ -297,7 +367,8 @@ FilterAction GhostUARTComponent::match_filters_(Direction dir, const std::vector
 void GhostUARTComponent::add_filter_rule(uint8_t dir_code,
                                          const std::vector<uint8_t> &prefix,
                                          uint8_t action_code,
-                                         bool log_change_only) {
+                                         bool log_change_only,
+                                         uint8_t push_mode_code) {
   Direction dir;
   if (dir_code == 1)
     dir = Direction::B_TO_A;
@@ -320,11 +391,18 @@ void GhostUARTComponent::add_filter_rule(uint8_t dir_code,
   rule.prefix = prefix;
   rule.action = act;
   rule.log_change_only = log_change_only;
+  // Set push_mode from code
+  switch (push_mode_code) {
+    case 1: rule.push_mode = PushMode::MATCH; break;
+    case 2: rule.push_mode = PushMode::CHANGE; break;
+    case 0:
+    default: rule.push_mode = PushMode::NEVER; break;
+  }
   filters_.push_back(std::move(rule));
 
   if (debug_enabled_) {
-    ESP_LOGI(TAG, "Added filter: dir=%d action=%d prefix_len=%u log_change_only=%d",
-             (int)dir, (int)act, (unsigned)prefix.size(), (int)log_change_only);
+    ESP_LOGI(TAG, "Added filter: dir=%d action=%d prefix_len=%u log_change_only=%d push_mode=%u",
+             (int)dir, (int)act, (unsigned)prefix.size(), (int)log_change_only, (unsigned)push_mode_code);
   }
 }
 
