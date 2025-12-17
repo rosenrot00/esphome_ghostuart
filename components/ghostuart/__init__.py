@@ -18,7 +18,7 @@ CONF_PRE_LISTEN_MS = "pre_listen_ms"
 CONF_MAX_RETRIES = "max_retries"
 CONF_DEBUG = "debug"
 CONF_BAUD = "baud"
-CONF_CHANGED_FRAME_TEXT_SENSOR = "changed_frame_text_sensor"
+CONF_PUSH_TEXT_SENSOR = "push_text_sensor"
 
 # Parity option (NONE/EVEN/ODD)
 CONF_PARITY = "parity"
@@ -95,7 +95,7 @@ CONFIG_SCHEMA = cv.Schema(
         cv.Optional(CONF_UART_B): cv.use_id(uart.UARTComponent),
 
         # Optional: push "changed frame" log lines to Home Assistant via a text sensor
-        cv.Optional(CONF_CHANGED_FRAME_TEXT_SENSOR): cv.use_id(text_sensor.TextSensor),
+        cv.Optional(CONF_PUSH_TEXT_SENSOR): cv.use_id(text_sensor.TextSensor),
 
         # Frame and timing
         cv.Optional(CONF_MAX_FRAME, default=512): cv.int_range(min=32, max=4096),
@@ -149,8 +149,8 @@ async def to_code(config):
         cg.add(var.set_uart_b(uart_b))
 
     # Optional: Home Assistant text sensor for changed-frame log lines
-    if CONF_CHANGED_FRAME_TEXT_SENSOR in config:
-        ts = await cg.get_variable(config[CONF_CHANGED_FRAME_TEXT_SENSOR])
+    if CONF_PUSH_TEXT_SENSOR in config:
+        ts = await cg.get_variable(config[CONF_PUSH_TEXT_SENSOR])
         cg.add(var.set_changed_frame_text_sensor(ts))
 
     # Basic timings and debug
